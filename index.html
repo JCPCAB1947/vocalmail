@@ -97,6 +97,19 @@ function stopTTS() {
   if (S.micOn) setTimeout(startRec, 600);
 }
 
+/* Bip court — accusé de réception pendant la dictée.
+   Ne coupe le micro qu'un instant, contrairement à une phrase parlée. */
+let _actx = null;
+function beep() {
+  try {
+    if (!_actx) _actx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = _actx.createOscillator(), g = _actx.createGain();
+    o.connect(g); g.connect(_actx.destination);
+    o.frequency.value = 880; g.gain.value = 0.15;
+    o.start(); o.stop(_actx.currentTime + 0.12);
+  } catch(e) {}
+}
+
 /* ── Reconnaissance vocale ─────────────────────────────────────── */
 let rec = null, recOn = false;
 
@@ -157,6 +170,7 @@ const I = {
   LUI_ECRIRE: ['lui ecrire','ecrire a','envoyer a','lui envoyer','contacter'],
   SON_ADRESSE:['son adresse','l adresse','adresse mail','epelle','son adresse mail'],
   TERMINER: ['termine','fin du message','j ai fini','c est fini','fin','c est tout','voila','fini'],
+  ANNULER:  ['annule','annuler','annulation','annule le mail','annule tout','abandonne','laisse tomber'],
   STOP:     ['stop','arrete','interromps','saute','assez','passe'],
 };
 
@@ -404,7 +418,7 @@ function goComposeRecipient() {
 }
 
 async function hRecipient(t) {
-  if (is(t,'RETOUR')) return goMenu();
+  if (is(t,'RETOUR') || is(t,'ANNULER')) { speak('Mail annulé.'); return setTimeout(goMenu, 1000); }
   if (!t || t.trim().length < 2) return confused(() => speak('Dites le nom de la personne.'));
   S.confusion = 0;
   if (t.includes('@')) {
@@ -478,7 +492,7 @@ function goComposeSubject() {
 }
 
 function hSubject(t) {
-  if (is(t,'RETOUR')) return goMenu();
+  if (is(t,'RETOUR') || is(t,'ANNULER')) { speak('Mail annulé.'); return setTimeout(goMenu, 1000); }
   if (is(t,'SUITE') && S.compose.subject) {
     speak(`Objet conservé : ${S.compose.subject}. Dictez votre message. TERMINÉ pour finir.`);
     return setTimeout(goComposeBody, 100);
@@ -491,18 +505,26 @@ function hSubject(t) {
 
 function goComposeBody() {
   S.screen = 'COMPOSE_BODY'; S.confusion = 0;
-  if (!S.talking) speak("Je vous écoute. Dites TERMINÉ pour finir.");
+  if (!S.talking) speak("Je vous écoute. Un bip confirme chaque phrase reçue. Dites TERMINÉ pour finir, ou ANNULER pour tout abandonner.");
 }
 
 function hBody(t) {
   if (is(t,'TERMINER')) {
-    if (!S.compose.body.trim()) { speak('Message vide. Dictez au moins une phrase.'); return; }
+    if (!S.compose.body.trim()) {
+      speak("Je n'ai rien reçu. Parlez après le bip.", () => beep());
+      return;
+    }
     speak('Message terminé. Je vous relis le mail.', () => setTimeout(goComposeConfirm, 500));
     return;
   }
-  if (is(t,'RETOUR') || is(t,'QUITTER')) { speak('Mail annulé.'); return setTimeout(goMenu, 1000); }
+  /* ANNULER = tout abandonner, mail et envoi */
+  if (is(t,'ANNULER') || is(t,'RETOUR') || is(t,'QUITTER')) {
+    S.compose = null;
+    speak('Mail annulé. Rien ne sera envoyé.');
+    return setTimeout(goMenu, 1500);
+  }
   S.compose.body += (S.compose.body ? ' ' : '') + t;
-  speak('Compris. Continuez ou dites TERMINÉ.');
+  beep(); /* bip bref : reçu — le micro reste quasi disponible */
 }
 
 function goComposeConfirm() {
