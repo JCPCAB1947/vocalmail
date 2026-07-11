@@ -27,7 +27,7 @@
 
 <script>
 /* ================================================================
-   VOCALMAIL v9.5 — Interface 100 % vocale
+   VOCALMAIL v9.7 — Interface 100 % vocale
    Écran noir + cercle blanc. Toucher l'écran pour démarrer.
    Connexion au Worker Cloudflare — clé permanente, zéro authentification.
    ================================================================ */
@@ -68,7 +68,7 @@ function _flush() {
     return;
   }
   _spk = true; S.talking = true;
-  stopRec(); /* couper le micro AVANT de parler */
+  stopRec(); /* micro coupé pendant la parole — les taps commandent la lecture */
   const { txt, then } = _q.shift();
   const u = new SpeechSynthesisUtterance(txt);
   u.lang = 'fr-FR'; u.rate = 1.0; u.pitch = 1.0;
@@ -165,6 +165,13 @@ const I = {
   STOP:     ['stop','arrete','interromps','saute','assez','passe'],
 };
 
+/* Correspondance stricte : l'énoncé entier doit ÊTRE la commande.
+   Utilisé pendant la lecture (micro ouvert) pour ignorer l'écho de la voix. */
+function isExact(t, k) {
+  const nt = N(t);
+  return (I[k] || []).some(p => nt === N(p));
+}
+
 function is(t, k) {
   const nt = N(t);
   return (I[k] || []).some(p => nt.includes(N(p)));
@@ -251,9 +258,9 @@ function onUtterance(t) {
   /* Pendant TTS : ignorer sauf interruptions en lecture */
   if (S.talking) {
     if (S.screen === 'READING_EMAIL') {
-      if (is(t,'STOP') || is(t,'RETOUR')) { stopTTS(); return goMenu(); }
-      if (is(t,'SUITE'))  { stopTTS(); return goNextEmail(); }
-      if (is(t,'RELIRE')) { stopTTS(); return goReadEmail(S.idx); }
+      if (isExact(t,'STOP') || isExact(t,'RETOUR')) { stopTTS(); return goMenu(); }
+      if (isExact(t,'SUITE'))  { stopTTS(); return goNextEmail(); }
+      if (isExact(t,'RELIRE')) { stopTTS(); return goReadEmail(S.idx); }
     }
     return;
   }
@@ -623,16 +630,33 @@ function boot() {
   });
 }
 
-/* Toucher l'écran : démarrer — ou interrompre la lecture en cours */
+/* Taps sur l'écran :
+   - premier toucher de la session : démarrage
+   - pendant la lecture d'un mail :
+       1 tap  → pause : "Relire, suivant, ou répondre ?"
+       2 taps rapides → mail suivant directement */
+let _tapTimer = null;
+
 function onTap() {
   if (!started) return boot();
-  if (S.screen === 'READING_EMAIL') {
-    stopTTS(); S.screen = 'EMAIL_ACTIONS';
-    speak('Relire, suivant, ou répondre ?');
+  if (S.screen !== 'READING_EMAIL') return;
+
+  if (_tapTimer) {
+    /* DOUBLE TAP → suivant */
+    clearTimeout(_tapTimer); _tapTimer = null;
+    stopTTS();
+    goNextEmail();
+  } else {
+    /* attendre un éventuel second tap */
+    _tapTimer = setTimeout(() => {
+      _tapTimer = null;
+      /* TAP SIMPLE → pause + question */
+      stopTTS(); S.screen = 'EMAIL_ACTIONS';
+      speak('Relire, suivant, ou répondre ?');
+    }, 350);
   }
 }
-document.body.addEventListener('click',  onTap);
-document.body.addEventListener('touchend', onTap);
+document.body.addEventListener('click', onTap);
 </script>
 </body>
 </html>
