@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="VocalMail">
+<title>VocalMail</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* L'ECRAN ENTIER EST LE BOUTON */
+  #ecran {
+    width: 100vw;
+    height: 100vh;
+    background: #ffffff;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+
+  #ecran.ecoute { background: #fff0f0; }
+  #ecran.parle  { background: #f0fff0; }
+  #ecran:active { background: #f0f0ff; }
+
+  #cercle {
+    width: 200px;
+    height: 200px;
+    border-radius: 50%;
+    background: #2a2aff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 80px;
+    margin-bottom: 2rem;
+    transition: background 0.2s, transform 0.1s;
+    pointer-events: none;
+    box-shadow: 0 8px 32px rgba(42,42,255,0.25);
+  }
+
+  #ecran.ecoute #cercle { background: #ff2a2a; transform: scale(1.05); box-shadow: 0 8px 32px rgba(255,42,42,0.3); }
+  #ecran.parle  #cercle { background: #2aaa2a; box-shadow: 0 8px 32px rgba(42,170,42,0.3); }
+
+  #etat {
+    font-family: -apple-system, sans-serif;
+    font-size: 26px;
+    font-weight: 400;
+    color: #111111;
+    text-align: center;
+    padding: 0 2.5rem;
+    line-height: 1.6;
+    max-width: 600px;
+    pointer-events: none;
+  }
+
+  #transcription {
+    font-family: -apple-system, sans-serif;
+    font-size: 16px;
+    color: #888888;
+    text-align: center;
+    padding: 1.5rem 2rem 0;
+    font-style: italic;
+    min-height: 28px;
+    pointer-events: none;
+  }
+
+  #aide {
+    position: fixed;
+    bottom: 1.5rem;
+    font-family: -apple-system, sans-serif;
+    font-size: 13px;
+    color: #aaaaaa;
+    text-align: center;
+    width: 100%;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+<div id="ecran" role="button" aria-label="Toucher l'ecran pour parler">
+
+  <div id="cercle">🎤</div>
+
+  <div id="etat">Touchez l'écran pour commencer</div>
+
+  <div id="transcription"></div>
+
+</div>
+
+<div id="aide">Touchez n'importe où sur l'écran pour parler</div>
+
+<script>
+// ============================================================
+// VOCALMAIL v2 — Gestion vocale des mails pour utilisateur aveugle
+// Corrections v2 :
+//  1. Message de bienvenue déclenché au premier toucher (contrainte iOS)
+//  2. Conflit "nouveau mail" / "mails non lus" résolu (priorités)
+//  3. Commande "annuler" disponible à tout moment en composition
+//  4. Flag anti-callback-fantôme après interruption de la voix
+//  5. Nettoyage complet de l'état visuel après interruption
+//  6. Regex Unicode pour les prénoms accentués
+//  7. Suppression synchronisée avec la boîte principale
+//  8. Normalisation "e-mail" / "email" / "émail" -> "mail"
+// ============================================================
+
+// --- MAILS DE DEMONSTRATION -------------------------------------------------
+const MAILS = [
+  {
+    id: 1,
+    de: "Docteur Martin Bernard",
+    email: "m.bernard@chu.fr",
+    objet: "Résultats d'analyse",
+    date: new Date(2026, 6, 11),
+    corps: "Bonjour. Je vous transmets les résultats de votre bilan sanguin du 8 juillet. Tous les paramètres sont dans les normes. Bonne nouvelle. N'hésitez pas à me contacter si vous avez des questions. Cordialement, Docteur Bernard.",
+    lu: false
+  },
+  {
+    id: 2,
+    de: "Marie Dupont",
+    email: "marie.dupont@gmail.com",
+    objet: "Déjeuner de mardi",
+    date: new Date(2026, 6, 10),
+    corps: "Salut ! Est-ce que tu serais libre mardi prochain pour déjeuner ensemble ? J'aurais des choses à te raconter. Réponds-moi dès que tu peux. Bises, Marie.",
+    lu: false
+  },
+  {
+    id: 3,
+    de: "Assurance Prévoyance",
+    email: "contact@assurance.fr",
+    objet: "Renouvellement de votre contrat",
+    date: new Date(2026, 6, 9),
+    corps: "Madame, Monsieur. Votre contrat arrive à échéance le 31 juillet 2026. Sans action de votre part dans les 15 jours, il sera résilié automatiquement. Merci de nous contacter. Cordialement, le service client.",
+    lu: true
+  },
+  {
+    id: 4,
+    de: "Cabinet Leblanc",
+    email: "contact@cabinet-leblanc.fr",
+    objet: "Consultation du 15 juillet",
+    date: new Date(2026, 6, 8),
+    corps: "Bonjour. Nous confirmons votre rendez-vous de consultation le 15 juillet 2026 à 14 heures. Merci de vous munir des documents mentionnés lors de notre dernier échange. Bien à vous, Maître Leblanc.",
+    lu: true
+  },
+  {
+    id: 5,
+    de: "Sophie Renard",
+    email: "sophie@outlook.com",
+    objet: "Photos de la fête",
+    date: new Date(2026, 6, 7),
+    corps: "Coucou ! Comme promis je t'envoie les photos de la fête. C'était une super soirée. J'espère qu'elles te plairont. À bientôt, Sophie.",
+    lu: true
+  }
+];
+
+// --- ETAT --------------------------------------------------------------------
+let premierToucher   = true;    // Correction 1 : bienvenue au 1er toucher
+let ecoute           = false;
+let parle            = false;
+let interrompu       = false;   // Correction 4 : anti-callback-fantome
+let reconnaissance   = null;
+let mailsEnCours     = [];
+let indexEnCours     = 0;
+let modeComposition  = false;
+let composition      = { a: '', objet: '', corps: '' };
+let etapeComposition = '';
+let attendConfirmation = false;
+
+// --- ELEMENTS ------------------------------------------------------------------
+const ecran     = document.getElementById('ecran');
+const cercle    = document.getElementById('cercle');
+const etatDiv   = document.getElementById('etat');
+const transcDiv = document.getElementById('transcription');
+
+// --- VOIX ------------------------------------------------------------------------
+function dire(texte, suite) {
+  interrompu = false;
+  window.speechSynthesis.cancel();
+
+  // Sur iOS, un cancel suivi d'un speak immediat echoue parfois : petit delai.
+  setTimeout(() => {
+    const u = new SpeechSynthesisUtterance(texte);
+    u.lang  = 'fr-FR';
+    u.rate  = 1.0;
+    u.pitch = 1.0;
+    u.onstart = () => {
+      parle = true;
+      ecran.classList.add('parle');
+      cercle.textContent = '🔊';
+      etatDiv.textContent = texte;
+    };
+    u.onend = () => {
+      parle = false;
+      ecran.classList.remove('parle');
+      cercle.textContent = '🎤';
+      if (suite && !interrompu) suite();   // Correction 4
+    };
+    window.speechSynthesis.speak(u);
+  }, 120);
+}
+
+function interrompreVoix() {
+  interrompu = true;                 // Correction 4
+  window.speechSynthesis.cancel();
+  parle = false;
+  ecran.classList.remove('parle');   // Correction 5
+  cercle.textContent = '🎤';
+}
+
+// --- TOUCHER = LE SEUL GESTE -------------------------------------------------------
+ecran.addEventListener('click', gererToucher);
+
+function gererToucher() {
+  // Correction 1 : le tout premier toucher declenche la bienvenue (contrainte iOS :
+  // la synthese vocale ne peut demarrer qu'apres un geste utilisateur).
+  if (premierToucher) {
+    premierToucher = false;
+    const nonLus = MAILS.filter(m => !m.lu).length;
+    dire(`Bienvenue dans VocalMail. Vous avez ${nonLus} mails non lus. Touchez l'écran, attendez le bip, puis dites votre commande. Par exemple : mes mails. Ou dites aide.`);
+    return;
+  }
+
+  // Toucher pendant que la voix parle : on la coupe et on ecoute directement.
+  if (parle) {
+    interrompreVoix();
+    demarrerEcoute();
+    return;
+  }
+
+  if (ecoute) { arreterEcoute(); } else { demarrerEcoute(); }
+}
+
+// --- MICRO --------------------------------------------------------------------------
+function demarrerEcoute() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    dire("La reconnaissance vocale n'est pas disponible sur ce navigateur. Veuillez utiliser Safari.");
+    return;
+  }
+  reconnaissance = new SR();
+  reconnaissance.lang = 'fr-FR';
+  reconnaissance.continuous = false;
+  reconnaissance.interimResults = false;
+
+  reconnaissance.onstart = () => {
+    ecoute = true;
+    ecran.classList.add('ecoute');
+    cercle.textContent = '👂';
+    etatDiv.textContent = 'Je vous écoute…';
+  };
+
+  reconnaissance.onresult = (e) => {
+    const brut = e.results[0][0].transcript.trim().toLowerCase();
+    const texte = normaliser(brut);          // Correction 8
+    transcDiv.textContent = '« ' + brut + ' »';
+    arreterEcoute();
+    traiterCommande(texte);
+  };
+
+  reconnaissance.onerror = (e) => {
+    arreterEcoute();
+    if (e.error === 'no-speech') {
+      dire("Je n'ai rien entendu. Touchez l'écran et parlez après le signal.");
+    } else if (e.error === 'not-allowed') {
+      dire("L'accès au microphone est refusé. Autorisez le micro dans les réglages de Safari.");
+    } else {
+      dire("Je n'ai pas compris. Touchez l'écran et réessayez.");
+    }
+  };
+
+  reconnaissance.onend = () => { arreterEcoute(); };
+
+  try { reconnaissance.start(); }
+  catch(err) { arreterEcoute(); }
+}
+
+function arreterEcoute() {
+  ecoute = false;
+  if (reconnaissance) {
+    try { reconnaissance.stop(); } catch(e) {}
+    reconnaissance = null;
+  }
+  ecran.classList.remove('ecoute');
+  if (!parle) cercle.textContent = '🎤';
+}
+
+// --- NORMALISATION (Correction 8) ------------------------------------------------------
+function normaliser(t) {
+  return t
+    .replace(/e-mails?/g, 'mail')
+    .replace(/emails?/g, 'mail')
+    .replace(/émails?/g, 'mail')
+    .replace(/courriels?/g, 'mail')
+    .replace(/mels?\b/g, 'mail')
+    .replace(/messages?/g, 'mail');
+}
+
+// --- COMMANDES ---------------------------------------------------------------------------
+function traiterCommande(cmd) {
+
+  // ANNULER — prioritaire, disponible partout (Correction 3)
+  if (cmd.includes('annul') || cmd.includes('stop') || cmd.includes('laisse tomber')) {
+    if (modeComposition || attendConfirmation) {
+      modeComposition = false;
+      attendConfirmation = false;
+      composition = { a: '', objet: '', corps: '' };
+      etapeComposition = '';
+      dire("D'accord, j'annule le mail en cours. Que voulez-vous faire ?");
+    } else {
+      dire("D'accord. Que voulez-vous faire ?");
+    }
+    return;
+  }
+
+  // CONFIRMATION ENVOI
+  if (attendConfirmation) {
+    if (cmd.includes('oui') || cmd.includes('confirme') || cmd.includes('envoi')) {
+      attendConfirmation = false;
+      modeComposition = false;
+      composition = { a: '', objet: '', corps: '' };
+      etapeComposition = '';
+      dire("Mail envoyé.");
+    } else if (cmd.includes('non')) {
+      attendConfirmation = false;
+      modeComposition = false;
+      composition = { a: '', objet: '', corps: '' };
+      etapeComposition = '';
+      dire("Envoi annulé. Le mail n'a pas été envoyé.");
+    } else {
+      dire("Dites OUI pour envoyer, ou NON pour annuler.");
+    }
+    return;
+  }
+
+  // MODE COMPOSITION — tout ce qui est dit devient le contenu
+  if (modeComposition) {
+    traiterComposition(cmd);
+    return;
+  }
+
+  // AIDE
+  if (cmd.includes('aide') || cmd.includes('quoi dire') || cmd.includes('commande')) {
+    dire("Voici les commandes. Mes mails : pour entendre toute votre boîte. Mes trois derniers mails. Mes mails non lus. Mails de Marie : pour les mails d'une personne. Écrire un mail. Suivant. Précédent. Répéter. Répondre. Supprimer. Et annuler, à tout moment.");
+    return;
+  }
+
+  // ECRIRE — teste AVANT "non lus" pour eviter le conflit "nouveau mail" (Correction 2)
+  if (cmd.includes('écrire') || cmd.includes('ecrire') || cmd.includes('composer') ||
+      cmd.includes('rédiger') || cmd.includes('rediger') || cmd.includes('nouveau mail') ||
+      cmd.includes('envoyer un mail')) {
+    modeComposition = true;
+    composition = { a: '', objet: '', corps: '' };
+    etapeComposition = 'destinataire';
+    dire("À qui voulez-vous écrire ? Touchez l'écran et dites le nom. Ou dites annuler.");
+    return;
+  }
+
+  // MES X DERNIERS MAILS
+  const matchNombre = cmd.match(/(\d+|un|deux|trois|quatre|cinq|six|sept|huit|neuf|dix)\s+derniers?\s+mails?/);
+  if (matchNombre) {
+    const n = convertirNombre(matchNombre[1]);
+    mailsEnCours = [...MAILS].sort((a,b) => b.date - a.date).slice(0, n);
+    indexEnCours = 0;
+    if (mailsEnCours.length === 0) { dire("Votre boîte est vide."); return; }
+    dire(`Voici vos ${mailsEnCours.length} derniers mails.`, () => lireUnMail(mailsEnCours[0]));
+    return;
+  }
+
+  // MAILS NON LUS
+  if (cmd.includes('non lu') || cmd.includes('pas lu') || cmd.includes('nouveaux') || cmd.includes('nouveau')) {
+    mailsEnCours = MAILS.filter(m => !m.lu);
+    indexEnCours = 0;
+    if (mailsEnCours.length === 0) { dire("Vous n'avez aucun mail non lu. Tout est à jour."); return; }
+    const s = mailsEnCours.length > 1 ? 's' : '';
+    dire(`Vous avez ${mailsEnCours.length} mail${s} non lu${s}.`, () => lireUnMail(mailsEnCours[0]));
+    return;
+  }
+
+  // MAILS DE [NOM] — regex Unicode pour les accents (Correction 6)
+  const matchDe = cmd.match(/mails?\s+d[e']\s*([a-zà-öø-ÿ]+(?:\s+[a-zà-öø-ÿ]+)?)/i);
+  if (matchDe) {
+    const nom = matchDe[1].trim();
+    mailsEnCours = MAILS.filter(m =>
+      m.de.toLowerCase().includes(nom) || m.email.toLowerCase().includes(nom)
+    );
+    indexEnCours = 0;
+    if (mailsEnCours.length === 0) { dire(`Je n'ai trouvé aucun mail de ${nom}.`); return; }
+    dire(`Voici les mails de ${nom}.`, () => lireUnMail(mailsEnCours[0]));
+    return;
+  }
+
+  // TOUS LES MAILS
+  if (cmd.includes('mes mails') || cmd.includes('ma boite') || cmd.includes('ma boîte') ||
+      cmd.includes('tous les mails') || cmd.includes('toute la boite') || cmd.includes('toute la boîte') ||
+      cmd.includes('lire les mails') || cmd.includes('lis les mails')) {
+    mailsEnCours = [...MAILS].sort((a,b) => b.date - a.date);
+    indexEnCours = 0;
+    if (mailsEnCours.length === 0) { dire("Votre boîte est vide."); return; }
+    dire(`Vous avez ${mailsEnCours.length} mails.`, () => lireUnMail(mailsEnCours[0]));
+    return;
+  }
+
+  // SUIVANT
+  if (cmd.includes('suivant') || cmd.includes('prochain') || cmd.includes('après') || cmd.includes('apres')) {
+    if (mailsEnCours.length === 0) { dire("Aucune liste en cours. Dites d'abord : mes mails."); return; }
+    if (indexEnCours < mailsEnCours.length - 1) {
+      indexEnCours++;
+      lireUnMail(mailsEnCours[indexEnCours]);
+    } else {
+      dire("C'est le dernier mail de la liste.");
+    }
+    return;
+  }
+
+  // PRECEDENT
+  if (cmd.includes('précédent') || cmd.includes('precedent') || cmd.includes('retour') || cmd.includes('reviens')) {
+    if (mailsEnCours.length === 0) { dire("Aucune liste en cours. Dites d'abord : mes mails."); return; }
+    if (indexEnCours > 0) {
+      indexEnCours--;
+      lireUnMail(mailsEnCours[indexEnCours]);
+    } else {
+      dire("C'est le premier mail de la liste.");
+    }
+    return;
+  }
+
+  // REPETER
+  if (cmd.includes('répète') || cmd.includes('repete') || cmd.includes('répéter') ||
+      cmd.includes('repeter') || cmd.includes('recommence') || cmd.includes('encore')) {
+    if (mailsEnCours.length > 0 && mailsEnCours[indexEnCours]) {
+      lireUnMail(mailsEnCours[indexEnCours]);
+    } else {
+      dire("Aucun mail en cours de lecture.");
+    }
+    return;
+  }
+
+  // REPONDRE
+  if (cmd.includes('répond') || cmd.includes('repond') || cmd.includes('réponse') || cmd.includes('reponse')) {
+    if (mailsEnCours.length === 0 || !mailsEnCours[indexEnCours]) {
+      dire("Aucun mail sélectionné. Dites d'abord : mes mails.");
+      return;
+    }
+    const m = mailsEnCours[indexEnCours];
+    composition.a = m.email;
+    composition.objet = 'Re : ' + m.objet;
+    composition.corps = '';
+    modeComposition = true;
+    etapeComposition = 'corps';
+    dire(`Réponse à ${m.de}. Touchez l'écran et dictez votre message. Ou dites annuler.`);
+    return;
+  }
+
+  // SUPPRIMER — synchronise avec la boite principale (Correction 7)
+  if (cmd.includes('supprim') || cmd.includes('efface') || cmd.includes('corbeille') || cmd.includes('poubelle')) {
+    if (mailsEnCours.length === 0 || !mailsEnCours[indexEnCours]) {
+      dire("Aucun mail sélectionné.");
+      return;
+    }
+    const m = mailsEnCours[indexEnCours];
+    mailsEnCours.splice(indexEnCours, 1);
+    const idx = MAILS.findIndex(x => x.id === m.id);
+    if (idx !== -1) MAILS.splice(idx, 1);       // Correction 7
+    if (indexEnCours >= mailsEnCours.length) indexEnCours = Math.max(0, mailsEnCours.length - 1);
+    if (mailsEnCours.length > 0) {
+      dire(`Mail de ${m.de} supprimé. Il reste ${mailsEnCours.length} mail${mailsEnCours.length > 1 ? 's' : ''} dans la liste. Dites suivant pour continuer.`);
+    } else {
+      dire(`Mail de ${m.de} supprimé. La liste est maintenant vide.`);
+    }
+    return;
+  }
+
+  // NON RECONNU
+  dire("Je n'ai pas compris. Dites aide pour connaître les commandes.");
+}
+
+// --- COMPOSITION ---------------------------------------------------------------------------
+function traiterComposition(cmd) {
+  if (etapeComposition === 'destinataire') {
+    composition.a = cmd;
+    etapeComposition = 'objet';
+    dire(`Destinataire : ${cmd}. Touchez l'écran et dites l'objet du mail.`);
+  } else if (etapeComposition === 'objet') {
+    composition.objet = cmd;
+    etapeComposition = 'corps';
+    dire(`Objet : ${cmd}. Touchez l'écran et dictez votre message.`);
+  } else if (etapeComposition === 'corps') {
+    composition.corps = cmd;
+    etapeComposition = '';
+    attendConfirmation = true;
+    dire(`Votre mail est prêt. À : ${composition.a}. Objet : ${composition.objet}. Message : ${composition.corps}. Touchez l'écran et dites OUI pour envoyer, ou NON pour annuler.`);
+  }
+}
+
+// --- LECTURE -----------------------------------------------------------------------------------
+function lireUnMail(mail) {
+  if (!mail) { dire("Aucun mail à lire."); return; }
+  mail.lu = true;
+  const pos = `Mail ${indexEnCours + 1} sur ${mailsEnCours.length}.`;
+  const texte = `${pos} De : ${mail.de}. Objet : ${mail.objet}. Message : ${mail.corps} Touchez l'écran pour dire : suivant, répéter, répondre ou supprimer.`;
+  dire(texte);
+}
+
+// --- UTILITAIRE ----------------------------------------------------------------------------------
+function convertirNombre(s) {
+  const mots = { un:1, deux:2, trois:3, quatre:4, cinq:5, six:6, sept:7, huit:8, neuf:9, dix:10 };
+  return mots[s] || parseInt(s) || 3;
+}
+</script>
+</body>
+</html>
