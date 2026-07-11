@@ -27,7 +27,7 @@
 
 <script>
 /* ================================================================
-   VOCALMAIL v9.1 — Interface 100 % vocale
+   VOCALMAIL v9.2 — Interface 100 % vocale
    Écran noir + cercle blanc. Toucher l'écran pour démarrer.
    Connexion au Worker Cloudflare — clé permanente, zéro authentification.
    ================================================================ */
@@ -150,7 +150,10 @@ const I = {
   QUITTER:  ['quitter','quitte','au revoir','fermer','bye','sortir'],
   OUI:      ['oui','vas y','envoie','d accord','ok','confirme','c est bon','parfait','yes','allez'],
   NON:      ['non','annule','annuler','pas maintenant','stop d envoi','surtout pas','cancel','laisse tomber'],
-  SUITE:    ['la suite','continue','suivant','encore','prochain','passe','apres','le suivant'],
+  SUITE:    ['la suite','continue','suivant','prochain','passe','apres','le suivant'],
+  RELIRE:   ['relire','relis','repete','repeter','encore une fois','redis','recommence la lecture'],
+  ANCIEN:   ['le plus ancien','plus ancien','ancien','les anciens d abord','vieux'],
+  RECENT:   ['le plus recent','plus recent','recent','dernier','le dernier','nouveau','le plus nouveau'],
   ANCIENS:  ['anciens','les anciens','deja lus','vieux','anciens mails','precedents'],
   RETOUR:   ['retour','revenir','menu','menu principal','sortir'],
   REPONDRE: ['repondre','reponse','reponds','repondre a ce mail'],
@@ -207,6 +210,7 @@ function spellAddr(e) {
 const DISPATCH = {
   MAIN_MENU:         hMenu,
   EMAIL_LIST:        hList,
+  ORDER_CHOICE:      hOrder,
   SEARCH_RESULTS:    hList,
   READING_EMAIL:     hReading,
   EMAIL_ACTIONS:     hActions,
@@ -226,7 +230,7 @@ function onUtterance(t) {
   if (S.talking) {
     if (S.screen === 'READING_EMAIL' && (is(t,'STOP') || is(t,'SUITE') || is(t,'RETOUR'))) {
       stopTTS(); S.screen = 'EMAIL_ACTIONS';
-      speak('Lecture interrompue. Dites RÉPONDRE, SUIVANT, ou MENU.');
+      speak('Relire, suivant, ou répondre ?');
     }
     return;
   }
@@ -251,7 +255,7 @@ function confused(fn) {
 
 function goMenu() {
   S.screen = 'MAIN_MENU'; S.confusion = 0;
-  speak('Dites LIRE pour vos mails, ÉCRIRE pour en rédiger un, ou CHERCHER pour trouver un mail.');
+  speak('Voulez-vous lire, envoyer, ou rechercher un mail ?');
 }
 
 function hMenu(t) {
@@ -277,17 +281,31 @@ async function goLoadEmails(older) {
   speak('Je cherche vos mails.');
   try {
     const q = older ? '' : 'is:unread';
-    const data = await api('/list?max=10&q=' + encodeURIComponent(q));
-    S.emails = data.emails || []; S.idx = 0;
+    const data = await api('/list?max=20&q=' + encodeURIComponent(q));
+    S.emails = data.emails || []; S.idx = 0; S.step = 1;
     if (!S.emails.length) {
-      speak('Aucun nouveau mail. Dites ANCIENS, ÉCRIRE, ou MENU.');
+      speak('Aucun nouveau mail. Dites ANCIENS pour les mails déjà lus, ÉCRIRE, ou MENU.');
       S.screen = 'EMAIL_LIST'; return;
     }
-    goList();
+    if (S.emails.length === 1) { S.idx = 0; S.step = 1; return goReadEmail(0); }
+    goOrderChoice();
   } catch(e) {
     speak("Je n'ai pas pu charger vos mails. Dites RÉESSAYER ou MENU.");
     S.screen = 'RETRY_LOAD';
   }
+}
+
+/* Choix du sens de lecture — la liste arrive du plus récent au plus ancien */
+function goOrderChoice() {
+  S.screen = 'ORDER_CHOICE'; S.confusion = 0;
+  speak(`Vous avez ${S.emails.length} mails. Voulez-vous le plus ancien ou le plus récent ?`);
+}
+
+function hOrder(t) {
+  if (is(t,'ANCIEN')) { S.idx = S.emails.length - 1; S.step = -1; return goReadEmail(S.idx); }
+  if (is(t,'RECENT')) { S.idx = 0; S.step = 1; return goReadEmail(0); }
+  if (is(t,'RETOUR')) return goMenu();
+  confused(() => speak('Dites LE PLUS ANCIEN ou LE PLUS RÉCENT.'));
 }
 
 
@@ -324,7 +342,7 @@ async function goReadEmail(idx) {
       () => {
         if (S.screen === 'READING_EMAIL') {
           S.screen = 'EMAIL_ACTIONS';
-          speak('Fin du mail. Dites RÉPONDRE, SUIVANT, ou MENU.');
+          speak('Fin du mail. Relire, suivant, ou répondre ?');
         }
       }
     );
@@ -341,22 +359,25 @@ async function goReadEmail(idx) {
 function hReading(t) {
   if (is(t,'STOP') || is(t,'SUITE') || is(t,'RETOUR')) {
     stopTTS(); S.screen = 'EMAIL_ACTIONS';
-    speak('Lecture interrompue. RÉPONDRE, SUIVANT, ou MENU.');
+    speak('Relire, suivant, ou répondre ?');
   }
 }
 
 function hActions(t) {
   S.confusion = 0;
+  if (is(t,'RELIRE'))   return goReadEmail(S.idx);
   if (is(t,'REPONDRE')) return goReply();
   if (is(t,'SUITE'))    return goNextEmail();
   if (is(t,'RETOUR'))   return goMenu();
   if (is(t,'ECRIRE'))   return goComposeRecipient();
-  confused(() => speak('Dites RÉPONDRE, SUIVANT, ou MENU.'));
+  confused(() => speak('Relire, suivant, ou répondre ?'));
 }
 
 function goNextEmail() {
-  if (S.idx + 1 < S.emails.length) goReadEmail(S.idx + 1);
-  else { speak('Dernier mail. Dites ANCIENS ou MENU.'); S.screen = 'EMAIL_LIST'; }
+  const ni = S.idx + S.step;
+  if (ni >= 0 && ni < S.emails.length) return goReadEmail(ni);
+  speak("C'était le dernier mail. Voulez-vous lire, envoyer, ou rechercher un mail ?");
+  S.screen = 'MAIN_MENU';
 }
 
 function goReply() {
@@ -561,10 +582,18 @@ function boot() {
     speak("Code d'accès manquant. Ouvrez le lien complet qui vous a été donné.");
     return;
   }
-  api('/ping').then(d => {
-    const name = d.account === 'philippe' ? 'Philippe' : 'Jean-Claude';
+  Promise.all([
+    api('/ping'),
+    api('/list?max=20&q=' + encodeURIComponent('is:unread')),
+  ]).then(([p, l]) => {
+    const name = p.account === 'philippe' ? 'Philippe' : 'Jean-Claude';
+    S.emails = l.emails || [];
+    const n = S.emails.length;
+    const compte = n === 0 ? "Vous n'avez aucun mail non lu."
+                 : n === 1 ? 'Vous avez un mail non lu.'
+                 : `Vous avez ${n} mails non lus.`;
     speak(
-      `Bonjour ${name}. Dites LIRE pour vos mails, ÉCRIRE pour en rédiger un, ou CHERCHER.`,
+      `Bonjour ${name}. ${compte} Voulez-vous lire, envoyer, ou rechercher un mail ?`,
       () => { S.screen = 'MAIN_MENU'; }
     );
   }).catch(() => {
@@ -572,9 +601,16 @@ function boot() {
   });
 }
 
-/* Une seule règle : toucher l'écran pour démarrer */
-document.body.addEventListener('click',  boot);
-document.body.addEventListener('touchend', boot);
+/* Toucher l'écran : démarrer — ou interrompre la lecture en cours */
+function onTap() {
+  if (!started) return boot();
+  if (S.screen === 'READING_EMAIL') {
+    stopTTS(); S.screen = 'EMAIL_ACTIONS';
+    speak('Relire, suivant, ou répondre ?');
+  }
+}
+document.body.addEventListener('click',  onTap);
+document.body.addEventListener('touchend', onTap);
 </script>
 </body>
 </html>
