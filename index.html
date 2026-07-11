@@ -27,40 +27,28 @@
 
 <script>
 /* ================================================================
-   VOCALMAIL v8.1 — Interface 100 % vocale
+   VOCALMAIL v9.1 — Interface 100 % vocale
    Écran noir + cercle blanc. Toucher l'écran pour démarrer.
-   Connexion directe à Gmail via Google OAuth.
+   Connexion au Worker Cloudflare — clé permanente, zéro authentification.
    ================================================================ */
 
-const CLIENT_ID  = '391707883131-0ocsm9hgh35fl4u191o3c2gf58rp24jf.apps.googleusercontent.com';
-const USER_NAME  = 'Philippe';
-const SCOPES     = 'https://www.googleapis.com/auth/gmail.modify';
-const REDIRECT   = window.location.href.split('#')[0].split('?')[0];
+const WORKER_URL = 'https://vocalmail-gmail.jc-penochetcab.workers.dev';
 
-/* ── Token ─────────────────────────────────────────────────────── */
-let token = null;
+/* Le code d'accès n'est JAMAIS écrit ici (page publique).
+   Il vient de l'adresse (?pin=XXXX) la première fois,
+   puis reste mémorisé sur l'appareil. */
+const _urlPin = new URLSearchParams(location.search).get('pin');
+if (_urlPin) try { localStorage.setItem('vm_pin', _urlPin); } catch(e) {}
+const PIN = _urlPin || (function(){ try { return localStorage.getItem('vm_pin') || ''; } catch(e) { return ''; } })();
 
-function saveToken(t, exp) {
-  token = t;
-  sessionStorage.setItem('vm_t', t);
-  sessionStorage.setItem('vm_e', Date.now() + (parseInt(exp) - 60) * 1000);
-}
-
-function loadToken() {
-  const t = sessionStorage.getItem('vm_t');
-  const e = sessionStorage.getItem('vm_e');
-  if (t && e && Date.now() < +e) { token = t; return true; }
-  return false;
-}
-
-function startAuth() {
-  const p = new URLSearchParams({
-    client_id: CLIENT_ID,
-    redirect_uri: REDIRECT,
-    response_type: 'token',
-    scope: SCOPES,
-  });
-  window.location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + p;
+/* ── Appels au Worker (qui détient la clé permanente Gmail) ─────── */
+async function api(path, method = 'GET', body = null) {
+  const opts = { method, headers: { 'X-Pin': PIN, 'Content-Type': 'application/json' } };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(WORKER_URL + path, opts);
+  const data = await res.json();
+  if (!res.ok || data.error) throw new Error(data.error || 'HTTP ' + res.status);
+  return data;
 }
 
 /* ── TTS — micro coupé pendant la parole ───────────────────────── */
@@ -289,14 +277,12 @@ async function goLoadEmails(older) {
   speak('Je cherche vos mails.');
   try {
     const q = older ? '' : 'is:unread';
-    const data = await gmail('/messages?maxResults=10&q=' + encodeURIComponent(q));
-    const msgs = data.messages || [];
-    if (!msgs.length) {
+    const data = await api('/list?max=10&q=' + encodeURIComponent(q));
+    S.emails = data.emails || []; S.idx = 0;
+    if (!S.emails.length) {
       speak('Aucun nouveau mail. Dites ANCIENS, ÉCRIRE, ou MENU.');
-      S.screen = 'EMAIL_LIST'; S.emails = []; return;
+      S.screen = 'EMAIL_LIST'; return;
     }
-    const emails = await Promise.all(msgs.map(m => gmailMeta(m.id)));
-    S.emails = emails; S.idx = 0;
     goList();
   } catch(e) {
     speak("Je n'ai pas pu charger vos mails. Dites RÉESSAYER ou MENU.");
@@ -304,14 +290,7 @@ async function goLoadEmails(older) {
   }
 }
 
-async function gmailMeta(id) {
-  const d = await gmail(`/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`);
-  const h = {};
-  (d.payload?.headers || []).forEach(({ name, value }) => h[name] = value);
-  const from = h.From || '';
-  const name = from.replace(/<[^>]+>/, '').replace(/"/g, '').trim() || from.split('@')[0];
-  return { id, from_name: name, from_email: from, subject: h.Subject || 'sans objet' };
-}
+
 
 function goList() {
   S.screen = 'EMAIL_LIST'; S.confusion = 0;
@@ -337,12 +316,11 @@ async function goReadEmail(idx) {
   const meta = S.emails[idx];
   speak(`Je lis le mail de ${meta.from_name}.`);
   try {
-    const d = await gmail(`/messages/${meta.id}?format=full`);
-    const body = extractBody(d.payload);
-    S.mail = { ...meta, body };
+    const m = await api('/read?id=' + encodeURIComponent(meta.id));
+    S.mail = m;
     S.screen = 'READING_EMAIL';
     speak(
-      `De ${meta.from_name}. Objet : ${meta.subject}. Message : ${cleanTxt(body)}`,
+      `De ${m.from_name}. Objet : ${m.subject}. Message : ${cleanTxt(m.body)}`,
       () => {
         if (S.screen === 'READING_EMAIL') {
           S.screen = 'EMAIL_ACTIONS';
@@ -356,26 +334,9 @@ async function goReadEmail(idx) {
   }
 }
 
-function b64decode(data) {
-  /* base64url → UTF-8 correct (accents français) */
-  const bin = atob(data.replace(/-/g, '+').replace(/_/g, '/'));
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return new TextDecoder('utf-8').decode(bytes);
-}
 
-function extractBody(payload) {
-  if (!payload) return '';
-  if (payload.body?.data) return b64decode(payload.body.data);
-  if (payload.parts) {
-    for (const p of payload.parts) {
-      if (p.mimeType === 'text/plain' && p.body?.data)
-        return b64decode(p.body.data);
-    }
-    for (const p of payload.parts) { const s = extractBody(p); if (s) return s; }
-  }
-  return '';
-}
+
+
 
 function hReading(t) {
   if (is(t,'STOP') || is(t,'SUITE') || is(t,'RETOUR')) {
@@ -428,18 +389,8 @@ async function hRecipient(t) {
   }
   speak(`Je cherche ${t}.`);
   try {
-    /* Recherche dans l'historique Gmail — fonctionne pour tout compte,
-       aucun scope supplémentaire nécessaire */
-    const data = await gmail('/messages?maxResults=15&q=' + encodeURIComponent(t));
-    const msgs = data.messages || [];
-    const seen = {};
-    for (const m of msgs.slice(0, 15)) {
-      const meta = await gmailMeta(m.id);
-      const em = (meta.from_email.match(/<([^>]+)>/) || [null, meta.from_email])[1].trim();
-      if (em && !seen[em] && N(meta.from_name).includes(N(t).split(' ')[0]))
-        seen[em] = { name: meta.from_name, email: em };
-    }
-    const contacts = Object.values(seen).slice(0, 5);
+    const data = await api('/contacts?q=' + encodeURIComponent(t));
+    const contacts = data.contacts || [];
     if (!contacts.length) {
       speak(`${t} non trouvé. Dites l'adresse e-mail directement, ou RETOUR.`);
       S.screen = 'COMPOSE_RECIPIENT'; return;
@@ -542,8 +493,7 @@ async function doSend() {
   S.screen = 'LOADING'; speak("J'envoie votre mail.");
   const { to, toEmail, subject, body } = S.compose;
   try {
-    const raw = makeRaw(toEmail || to, subject, body);
-    await gmail('/messages/send', 'POST', { raw });
+    await api('/send', 'POST', { to: toEmail || to, subject, body });
     speak(`Mail envoyé à ${to}. Dites LIRE, ÉCRIRE, ou MENU.`);
     S.screen = 'MAIN_MENU';
   } catch(e) {
@@ -558,12 +508,7 @@ function hRetrySend(t) {
   confused(() => speak('OUI pour réessayer, NON pour annuler.'));
 }
 
-function makeRaw(to, subject, body) {
-  const b64subj = '=?UTF-8?B?' + btoa(unescape(encodeURIComponent(subject))) + '?=';
-  const msg = ['To: ' + to, 'Subject: ' + b64subj,
-               'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8', '', body].join('\r\n');
-  return btoa(unescape(encodeURIComponent(msg))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
-}
+
 
 /* ── Recherche ─────────────────────────────────────────────────── */
 
@@ -581,37 +526,19 @@ function hSearchQ(t) {
 async function goSearch(query) {
   S.screen = 'LOADING'; speak('Je cherche ' + query + '.');
   try {
-    const data = await gmail('/messages?maxResults=10&q=' + encodeURIComponent(query));
-    const msgs = data.messages || [];
-    if (!msgs.length) {
+    const data = await api('/search?q=' + encodeURIComponent(query));
+    S.emails = data.emails || []; S.idx = 0;
+    if (!S.emails.length) {
       speak('Aucun résultat. Dites MENU.');
       S.screen = 'SEARCH_QUERY'; return;
     }
-    const emails = await Promise.all(msgs.map(m => gmailMeta(m.id)));
-    S.emails = emails; S.idx = 0; S.screen = 'SEARCH_RESULTS'; goList();
+    S.screen = 'SEARCH_RESULTS'; goList();
   } catch(e) {
     speak('Recherche échouée. Dites MENU.'); S.screen = 'SEARCH_QUERY';
   }
 }
 
-/* ── Gmail API ─────────────────────────────────────────────────── */
-async function gmail(path, method = 'GET', body = null) {
-  const opts = {
-    method,
-    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-  };
-  if (body) opts.body = JSON.stringify(body);
-  const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me' + path, opts);
-  if (res.status === 401) {
-    token = null; sessionStorage.clear();
-    speak('Session expirée. Je vous redirige vers Google.');
-    setTimeout(startAuth, 2000);
-    throw new Error('401');
-  }
-  if (!res.ok) throw new Error('HTTP ' + res.status);
-  if (res.status === 204) return {};
-  return res.json();
-}
+
 
 /* ── Initialisation ────────────────────────────────────────────── */
 function id(s) { return document.getElementById(s); }
@@ -622,42 +549,30 @@ function id(s) { return document.getElementById(s); }
 let started = false;
 
 function boot() {
-  if (started) return;   /* verrou : une seule exécution */
+  if (started) return;
   started = true;
   _vx = speechSynthesis.getVoices();
   id('circle').classList.add('pulse');
 
-  /* 1. Récupérer le token */
-  const hash = new URLSearchParams(window.location.hash.replace('#', ''));
-  const hashToken = hash.get('access_token');
-  if (hashToken) {
-    saveToken(hashToken, hash.get('expires_in') || '3600');
-    history.replaceState(null, '', REDIRECT);
-  }
-  if (!token) loadToken();
-
-  /* 2. Micro */
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (SR) { initRec(); S.micOn = true; }
 
-  /* 3. Connecté ou pas ? */
-  if (token) {
+  if (!PIN) {
+    speak("Code d'accès manquant. Ouvrez le lien complet qui vous a été donné.");
+    return;
+  }
+  api('/ping').then(d => {
+    const name = d.account === 'philippe' ? 'Philippe' : 'Jean-Claude';
     speak(
-      `Bonjour ${USER_NAME}. Connecté à Gmail. Dites LIRE, ÉCRIRE, ou CHERCHER.`,
+      `Bonjour ${name}. Dites LIRE pour vos mails, ÉCRIRE pour en rédiger un, ou CHERCHER.`,
       () => { S.screen = 'MAIN_MENU'; }
     );
-  } else {
-    speak('Connexion Google.');
-    /* Redirection avec délai fixe — ne dépend PAS du onend de la voix
-       (le onend de Chrome est parfois muet, cause du blocage v8.0) */
-    setTimeout(startAuth, 2500);
-  }
+  }).catch(() => {
+    speak("Code d'accès refusé ou connexion impossible. Vérifiez le lien.");
+  });
 }
 
-/* Toucher n'importe où sur l'écran = démarrer.
-   TOUJOURS exigé, y compris au retour de Google : le retour est un
-   nouveau chargement de page, donc l'iPhone exige un nouveau geste
-   avant d'autoriser la voix. Une seule règle : toucher l'écran. */
+/* Une seule règle : toucher l'écran pour démarrer */
 document.body.addEventListener('click',  boot);
 document.body.addEventListener('touchend', boot);
 </script>
