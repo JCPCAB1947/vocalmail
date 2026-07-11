@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VocalMail</title>
+<style>
+  /* Interface UNIQUEMENT vocale — rien à voir, tout à entendre */
+  body { margin:0; background:#000; display:flex; align-items:center; justify-content:center; min-height:100vh; }
+  #auth-btn {
+    display:none;
+    padding:28px 56px; font-size:24px; font-family:system-ui,sans-serif;
+    background:#1a73e8; color:#fff; border:none; border-radius:12px;
+    cursor:pointer; outline:3px solid #fff;
+  }
+  #auth-btn:focus { outline:4px solid #FF0; }
+</style>
+</head>
+<body>
+
+<!-- Seul élément visuel : bouton d'autorisation Gmail, affiché uniquement si nécessaire -->
+<button id="auth-btn" onclick="startAuth()">
+  Appuyer pour autoriser Gmail
+</button>
+
+<script>
+/* ================================================================
+   VOCALMAIL v8.0 — Interface 100 % vocale
+   Connexion directe à Gmail via Google OAuth
+   ================================================================
+   CONFIGURATION : remplacez CLIENT_ID par votre identifiant Google
+   Google Cloud Console > API & Services > Identifiants > OAuth 2.0
+   ================================================================ */
+
+const CLIENT_ID  = 'VOTRE_CLIENT_ID.apps.googleusercontent.com';
+const USER_NAME  = 'Philippe';
+const SCOPES     = 'https://www.googleapis.com/auth/gmail.modify';
+const REDIRECT   = window.location.href.split('#')[0].split('?')[0];
+
+/* ── Token ─────────────────────────────────────────────────────── */
+let token = null;
+
+function saveToken(t, exp) {
+  token = t;
+  sessionStorage.setItem('vm_t', t);
+  sessionStorage.setItem('vm_e', Date.now() + (parseInt(exp) - 60) * 1000);
+}
+
+function loadToken() {
+  const t = sessionStorage.getItem('vm_t');
+  const e = sessionStorage.getItem('vm_e');
+  if (t && e && Date.now() < +e) { token = t; return true; }
+  return false;
+}
+
+function startAuth() {
+  id('auth-btn').style.display = 'none';
+  const p = new URLSearchParams({
+    client_id: CLIENT_ID,
+    redirect_uri: REDIRECT,
+    response_type: 'token',
+    scope: SCOPES,
+  });
+  window.location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + p;
+}
+
+/* ── TTS — micro coupé pendant la parole ───────────────────────── */
+let _vx = [], _q = [], _spk = false;
+speechSynthesis.onvoiceschanged = () => { _vx = speechSynthesis.getVoices(); };
+
+function speak(txt, then) {
+  if (!txt) return;
+  _q.push({ txt, then });
+  if (!_spk) _flush();
+}
+
+function _flush() {
+  if (!_q.length) {
+    _spk = false; S.talking = false;
+    if (S.micOn) setTimeout(startRec, 900); /* délai anti-feedback */
+    return;
+  }
+  _spk = true; S.talking = true;
+  stopRec(); /* couper le micro AVANT de parler */
+  const { txt, then } = _q.shift();
+  const u = new SpeechSynthesisUtterance(txt);
+  u.lang = 'fr-FR'; u.rate = 1.0; u.pitch = 1.0;
+  const fv = _vx.find(v => v.lang.startsWith('fr') && v.localService)
+           || _vx.find(v => v.lang.startsWith('fr'));
+  if (fv) u.voice = fv;
+  u.onend  = () => { _spk = false; S.talking = false; if (then) then(); _flush(); };
+  u.onerror = () => { _spk = false; S.talking = false; _flush(); };
+  speechSynthesis.speak(u);
+}
+
+function stopTTS() {
+  _q = []; speechSynthesis.cancel(); _spk = false; S.talking = false;
+  if (S.micOn) setTimeout(startRec, 600);
+}
+
+/* ── Reconnaissance vocale ─────────────────────────────────────── */
+let rec = null, recOn = false;
+
+function initRec() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return false;
+  rec = new SR();
+  rec.lang = 'fr-FR'; rec.continuous = true; rec.interimResults = false; rec.maxAlternatives = 3;
+  rec.onstart = () => { recOn = true; };
+  rec.onend   = () => {
+    recOn = false;
+    if (S.micOn && !S.talking) setTimeout(startRec, 400);
+  };
+  rec.onerror = e => { if (e.error !== 'no-speech') console.log('Rec: ' + e.error); };
+  rec.onresult = e => {
+    const t = e.results[e.results.length - 1][0].transcript.trim();
+    if (t) onUtterance(t);
+  };
+  return true;
+}
+
+function startRec() {
+  if (!recOn && !S.talking) try { rec.start(); } catch(e) {}
+}
+function stopRec() {
+  if (recOn) try { rec.stop(); } catch(e) {}
+}
+
+/* ── État global ───────────────────────────────────────────────── */
+let S = {
+  screen: 'IDLE',
+  emails: [], idx: 0, mail: null,
+  contacts: [],
+  compose: null,
+  confusion: 0,
+  micOn: false,
+  talking: false,
+};
+
+/* ── Normalisation et intents ──────────────────────────────────── */
+function N(t) {
+  return (t || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+const I = {
+  LIRE:     ['lire','lecture','mes mails','les mails','mes messages','nouveaux mails','ecouter mes mails'],
+  ECRIRE:   ['ecrire','nouveau mail','envoyer un mail','composer','rediger','envoyer','envoie'],
+  CHERCHER: ['chercher','cherche','recherche','trouver','retrouve','cherche le mail de','trouve le mail de'],
+  QUITTER:  ['quitter','quitte','au revoir','fermer','bye','sortir'],
+  OUI:      ['oui','vas y','envoie','d accord','ok','confirme','c est bon','parfait','yes','allez'],
+  NON:      ['non','annule','annuler','pas maintenant','stop d envoi','surtout pas','cancel','laisse tomber'],
+  SUITE:    ['la suite','continue','suivant','encore','prochain','passe','apres','le suivant'],
+  ANCIENS:  ['anciens','les anciens','deja lus','vieux','anciens mails','precedents'],
+  RETOUR:   ['retour','revenir','menu','menu principal','sortir'],
+  REPONDRE: ['repondre','reponse','reponds','repondre a ce mail'],
+  SES_MAILS:  ['ses mails','les mails de','lire ses mails','les siens'],
+  LUI_ECRIRE: ['lui ecrire','ecrire a','envoyer a','lui envoyer','contacter'],
+  SON_ADRESSE:['son adresse','l adresse','adresse mail','epelle','son adresse mail'],
+  TERMINER: ['termine','fin du message','j ai fini','c est fini','fin','c est tout','voila','fini'],
+  STOP:     ['stop','arrete','interromps','saute','assez','passe'],
+};
+
+function is(t, k) {
+  const nt = N(t);
+  return (I[k] || []).some(p => nt.includes(N(p)));
+}
+
+function extractNum(t) {
+  const nt = N(t);
+  const w = { 'un':1,'premier':1,'premiere':1,'deux':2,'deuxieme':2,'second':2,
+              'trois':3,'troisieme':3,'quatre':4,'cinq':5,'six':6,'sept':7,
+              'huit':8,'neuf':9,'dix':10 };
+  const m = nt.match(/\b([1-9]|10)\b/);
+  if (m) return +m[1];
+  for (const [k, v] of Object.entries(w)) if (nt.includes(k)) return v;
+  return null;
+}
+
+const ORD = ['premier','deuxième','troisième','quatrième','cinquième',
+             'sixième','septième','huitième','neuvième','dixième'];
+const ord = n => ORD[n-1] || String(n);
+
+/* ── Nettoyage email ───────────────────────────────────────────── */
+function cleanTxt(txt) {
+  if (!txt) return '';
+  txt = txt.replace(/<[^>]+>/g, ' ');
+  txt = txt.replace(/https?:\/\/\S+/g, '');
+  txt = txt.replace(/www\.\S+/g, '');
+  txt = txt.replace(/\S+@\S+\.\S+/g, '');
+  const ab = [
+    [/\bM\. /g, 'Monsieur '], [/\bMme\b/g, 'Madame'], [/\bDr\b/g, 'Docteur'],
+    [/\bsvp\b/gi, "s'il vous plaît"], [/\bcdt\b/gi, 'cordialement'],
+    [/\brdv\b/gi, 'rendez-vous'],
+  ];
+  for (const [r, s] of ab) txt = txt.replace(r, s);
+  return txt.replace(/\s+/g, ' ').replace(/(.{400}).+/, '$1…').trim();
+}
+
+function spellAddr(e) {
+  if (!e) return 'adresse inconnue';
+  return [...e].map(c => ({ '@': 'arobase', '.': 'point', '-': 'tiret', '_': 'tiret bas' }[c] || c)).join(' ');
+}
+
+/* ── Dispatcher ────────────────────────────────────────────────── */
+const DISPATCH = {
+  MAIN_MENU:         hMenu,
+  EMAIL_LIST:        hList,
+  SEARCH_RESULTS:    hList,
+  READING_EMAIL:     hReading,
+  EMAIL_ACTIONS:     hActions,
+  COMPOSE_RECIPIENT: hRecipient,
+  CONTACT_DISAMBIG:  hDisambig,
+  CONTACT_OPTIONS:   hContactOpts,
+  COMPOSE_SUBJECT:   hSubject,
+  COMPOSE_BODY:      hBody,
+  COMPOSE_CONFIRM:   hConfirm,
+  SEARCH_QUERY:      hSearchQ,
+  RETRY_SEND:        hRetrySend,
+};
+
+function onUtterance(t) {
+  console.log('⟫ ' + t);
+  /* Pendant TTS : ignorer sauf interruptions en lecture */
+  if (S.talking) {
+    if (S.screen === 'READING_EMAIL' && (is(t,'STOP') || is(t,'SUITE') || is(t,'RETOUR'))) {
+      stopTTS(); S.screen = 'EMAIL_ACTIONS';
+      speak('Lecture interrompue. Dites RÉPONDRE, SUIVANT, ou MENU.');
+    }
+    return;
+  }
+  if (is(t, 'QUITTER') && S.screen !== 'COMPOSE_BODY') return goGoodbye();
+  const h = DISPATCH[S.screen];
+  if (h) h(t);
+}
+
+function confused(fn) {
+  S.confusion++;
+  if (S.confusion >= 3) {
+    S.confusion = 0;
+    speak('Je reviens au menu principal.', () => setTimeout(goMenu, 500));
+  } else {
+    fn();
+  }
+}
+
+/* ================================================================
+   ÉCRANS
+   ================================================================ */
+
+function goMenu() {
+  S.screen = 'MAIN_MENU'; S.confusion = 0;
+  speak('Dites LIRE pour vos mails, ÉCRIRE pour en rédiger un, ou CHERCHER pour trouver un mail.');
+}
+
+function hMenu(t) {
+  S.confusion = 0;
+  if (is(t, 'LIRE'))   return goLoadEmails(false);
+  if (is(t, 'ECRIRE')) return goComposeRecipient();
+  if (is(t, 'CHERCHER') || /cherche|trouve|retrouve|recherche/.test(N(t))) {
+    const m = N(t).match(/(?:cherche|trouve|retrouve|recherche).*?de\s+(.+)/);
+    return m ? goSearch(m[1]) : goSearchQ();
+  }
+  confused(() => speak('Dites LIRE, ÉCRIRE, ou CHERCHER.'));
+}
+
+function goGoodbye() {
+  S.screen = 'IDLE'; S.micOn = false; stopRec(); stopTTS();
+  speak('Au revoir ' + USER_NAME + '. À bientôt.');
+}
+
+/* ── Lecture des mails ─────────────────────────────────────────── */
+
+async function goLoadEmails(older) {
+  S.screen = 'LOADING';
+  speak('Je cherche vos mails.');
+  try {
+    const q = older ? '' : 'is:unread';
+    const data = await gmail('/messages?maxResults=10&q=' + encodeURIComponent(q));
+    const msgs = data.messages || [];
+    if (!msgs.length) {
+      speak('Aucun nouveau mail. Dites ANCIENS, ÉCRIRE, ou MENU.');
+      S.screen = 'EMAIL_LIST'; S.emails = []; return;
+    }
+    const emails = await Promise.all(msgs.map(m => gmailMeta(m.id)));
+    S.emails = emails; S.idx = 0;
+    goList();
+  } catch(e) {
+    speak("Je n'ai pas pu charger vos mails. Dites RÉESSAYER ou MENU.");
+    S.screen = 'RETRY_LOAD';
+  }
+}
+
+async function gmailMeta(id) {
+  const d = await gmail(`/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject`);
+  const h = {};
+  (d.payload?.headers || []).forEach(({ name, value }) => h[name] = value);
+  const from = h.From || '';
+  const name = from.replace(/<[^>]+>/, '').replace(/"/g, '').trim() || from.split('@')[0];
+  return { id, from_name: name, from_email: from, subject: h.Subject || 'sans objet' };
+}
+
+function goList() {
+  S.screen = 'EMAIL_LIST'; S.confusion = 0;
+  let ann = `${S.emails.length} mail${S.emails.length > 1 ? 's' : ''}. `;
+  S.emails.slice(0, 5).forEach((e, i) => ann += `${ord(i+1)}, de ${e.from_name}, objet : ${e.subject}. `);
+  if (S.emails.length > 5) ann += `Et ${S.emails.length - 5} autres. `;
+  ann += 'Dites un numéro pour écouter.';
+  speak(ann);
+}
+
+function hList(t) {
+  const k = extractNum(t);
+  if (k && k >= 1 && k <= S.emails.length) { S.confusion = 0; return goReadEmail(k-1); }
+  if (is(t, 'ANCIENS'))  return goLoadEmails(true);
+  if (is(t, 'ECRIRE'))   return goComposeRecipient();
+  if (is(t, 'CHERCHER')) return goSearchQ();
+  if (is(t, 'RETOUR'))   return goMenu();
+  confused(() => speak(`Dites un numéro entre 1 et ${S.emails.length}, ANCIENS, ou MENU.`));
+}
+
+async function goReadEmail(idx) {
+  S.idx = idx; S.screen = 'LOADING';
+  const meta = S.emails[idx];
+  speak(`Je lis le mail de ${meta.from_name}.`);
+  try {
+    const d = await gmail(`/messages/${meta.id}?format=full`);
+    const body = extractBody(d.payload);
+    S.mail = { ...meta, body };
+    S.screen = 'READING_EMAIL';
+    speak(
+      `De ${meta.from_name}. Objet : ${meta.subject}. Message : ${cleanTxt(body)}`,
+      () => {
+        if (S.screen === 'READING_EMAIL') {
+          S.screen = 'EMAIL_ACTIONS';
+          speak('Fin du mail. Dites RÉPONDRE, SUIVANT, ou MENU.');
+        }
+      }
+    );
+  } catch(e) {
+    speak('Impossible de lire ce mail. Dites SUIVANT ou MENU.');
+    S.screen = 'EMAIL_ACTIONS';
+  }
+}
+
+function extractBody(payload) {
+  if (!payload) return '';
+  if (payload.body?.data) return atob(payload.body.data.replace(/-/g, '+').replace(/_/g, '/'));
+  if (payload.parts) {
+    for (const p of payload.parts) {
+      if (p.mimeType === 'text/plain' && p.body?.data)
+        return atob(p.body.data.replace(/-/g, '+').replace(/_/g, '/'));
+    }
+    for (const p of payload.parts) { const s = extractBody(p); if (s) return s; }
+  }
+  return '';
+}
+
+function hReading(t) {
+  if (is(t,'STOP') || is(t,'SUITE') || is(t,'RETOUR')) {
+    stopTTS(); S.screen = 'EMAIL_ACTIONS';
+    speak('Lecture interrompue. RÉPONDRE, SUIVANT, ou MENU.');
+  }
+}
+
+function hActions(t) {
+  S.confusion = 0;
+  if (is(t,'REPONDRE')) return goReply();
+  if (is(t,'SUITE'))    return goNextEmail();
+  if (is(t,'RETOUR'))   return goMenu();
+  if (is(t,'ECRIRE'))   return goComposeRecipient();
+  confused(() => speak('Dites RÉPONDRE, SUIVANT, ou MENU.'));
+}
+
+function goNextEmail() {
+  if (S.idx + 1 < S.emails.length) goReadEmail(S.idx + 1);
+  else { speak('Dernier mail. Dites ANCIENS ou MENU.'); S.screen = 'EMAIL_LIST'; }
+}
+
+function goReply() {
+  const m = S.mail;
+  S.compose = {
+    to: m.from_name, toEmail: m.from_email,
+    subject: 'Re : ' + m.subject.replace(/^Re\s*:\s*/i, ''),
+    body: '', replyId: m.id,
+  };
+  speak(`Réponse à ${m.from_name}. Dictez votre message. Dites TERMINÉ pour finir.`);
+  S.screen = 'COMPOSE_BODY';
+}
+
+/* ── Rédaction ─────────────────────────────────────────────────── */
+
+function goComposeRecipient() {
+  S.screen = 'COMPOSE_RECIPIENT'; S.confusion = 0;
+  S.compose = { to:'', toEmail:'', subject:'', body:'', replyId:null };
+  speak('À qui voulez-vous écrire ? Dites le nom.');
+}
+
+async function hRecipient(t) {
+  if (is(t,'RETOUR')) return goMenu();
+  if (!t || t.trim().length < 2) return confused(() => speak('Dites le nom de la personne.'));
+  S.confusion = 0;
+  if (t.includes('@')) {
+    S.compose.toEmail = t; S.compose.to = t;
+    speak(`Je vais envoyer à ${t}. Quel est l'objet ?`);
+    return setTimeout(goComposeSubject, 1500);
+  }
+  speak(`Je cherche ${t}.`);
+  try {
+    const r = await fetch(
+      `https://people.googleapis.com/v1/people:searchDirectoryPeople?query=${encodeURIComponent(t)}&readMask=names,emailAddresses&sources=DIRECTORY_SOURCE_TYPE_DOMAIN_CONTACT`,
+      { headers: { Authorization: 'Bearer ' + token } }
+    );
+    const data = await r.json();
+    const contacts = (data.people || [])
+      .map(p => ({ name: p.names?.[0]?.displayName || t, email: p.emailAddresses?.[0]?.value || '' }))
+      .filter(c => c.email);
+    if (!contacts.length) {
+      speak(`${t} non trouvé. Dites l'adresse e-mail directement, ou RETOUR.`);
+      S.screen = 'COMPOSE_RECIPIENT'; return;
+    }
+    if (contacts.length === 1) {
+      S.compose.to = contacts[0].name; S.compose.toEmail = contacts[0].email;
+      speak(`${contacts[0].name} trouvé. Quel est l'objet ?`);
+      return setTimeout(goComposeSubject, 1500);
+    }
+    S.contacts = contacts; S.screen = 'CONTACT_DISAMBIG'; S.confusion = 0;
+    let ann = `${contacts.length} contacts. `;
+    contacts.forEach((c, i) => ann += `${ord(i+1)}, ${c.name}. `);
+    speak(ann + 'Dites le numéro.');
+  } catch(e) {
+    S.compose.to = t; S.compose.toEmail = '';
+    speak(`Je vais écrire à ${t}. Quel est l'objet ?`);
+    setTimeout(goComposeSubject, 1500);
+  }
+}
+
+function hDisambig(t) {
+  const k = extractNum(t);
+  if (k && k >= 1 && k <= S.contacts.length) return pickContact(S.contacts[k-1]);
+  const nt = N(t);
+  for (const c of S.contacts) if (c.name.split(' ').some(p => nt.includes(N(p)))) return pickContact(c);
+  confused(() => {
+    let s = 'Rappel : ';
+    S.contacts.forEach((c, i) => s += `${i+1}, ${c.name}. `);
+    speak(s + 'Dites le numéro.');
+  });
+}
+
+function pickContact(c) {
+  S.compose.to = c.name; S.compose.toEmail = c.email; S.confusion = 0;
+  S.screen = 'CONTACT_OPTIONS';
+  speak(`${c.name}. Dites SES MAILS, LUI ÉCRIRE, ou SON ADRESSE.`);
+}
+
+function hContactOpts(t) {
+  if (is(t,'SES_MAILS'))   { return goSearch('from:' + S.compose.toEmail); }
+  if (is(t,'LUI_ECRIRE'))  { speak(`Mail pour ${S.compose.to}.`); return setTimeout(goComposeSubject, 1000); }
+  if (is(t,'SON_ADRESSE')) { speak(spellAddr(S.compose.toEmail)); return; }
+  if (is(t,'RETOUR'))      return goMenu();
+  confused(() => speak('SES MAILS, LUI ÉCRIRE, ou SON ADRESSE ?'));
+}
+
+function goComposeSubject() {
+  S.screen = 'COMPOSE_SUBJECT'; S.confusion = 0;
+  if (!S.talking) speak("Quel est l'objet du mail ?");
+}
+
+function hSubject(t) {
+  if (is(t,'RETOUR')) return goMenu();
+  if (is(t,'SUITE') && S.compose.subject) {
+    speak(`Objet conservé : ${S.compose.subject}. Dictez votre message. TERMINÉ pour finir.`);
+    return setTimeout(goComposeBody, 100);
+  }
+  if (!t.trim()) return confused(() => speak("Dites l'objet."));
+  S.confusion = 0; S.compose.subject = t;
+  speak(`Objet : ${t}. Dictez votre message. Dites TERMINÉ pour finir.`);
+  setTimeout(goComposeBody, 100);
+}
+
+function goComposeBody() {
+  S.screen = 'COMPOSE_BODY'; S.confusion = 0;
+  if (!S.talking) speak("Je vous écoute. Dites TERMINÉ pour finir.");
+}
+
+function hBody(t) {
+  if (is(t,'TERMINER')) {
+    if (!S.compose.body.trim()) { speak('Message vide. Dictez au moins une phrase.'); return; }
+    speak('Message terminé. Je vous relis le mail.', () => setTimeout(goComposeConfirm, 500));
+    return;
+  }
+  if (is(t,'RETOUR') || is(t,'QUITTER')) { speak('Mail annulé.'); return setTimeout(goMenu, 1000); }
+  S.compose.body += (S.compose.body ? ' ' : '') + t;
+  speak('Compris. Continuez ou dites TERMINÉ.');
+}
+
+function goComposeConfirm() {
+  S.screen = 'COMPOSE_CONFIRM'; S.confusion = 0;
+  speak(`À ${S.compose.to}. Objet : ${S.compose.subject}. Message : ${S.compose.body}. Dites OUI pour envoyer, NON pour annuler.`);
+}
+
+function hConfirm(t) {
+  if (is(t,'OUI')) return doSend();
+  if (is(t,'NON')) { speak('Mail annulé.'); S.screen = 'MAIN_MENU'; return; }
+  confused(() => speak('OUI pour envoyer, NON pour annuler.'));
+}
+
+async function doSend() {
+  S.screen = 'LOADING'; speak("J'envoie votre mail.");
+  const { to, toEmail, subject, body } = S.compose;
+  try {
+    const raw = makeRaw(toEmail || to, subject, body);
+    await gmail('/messages/send', 'POST', { raw });
+    speak(`Mail envoyé à ${to}. Dites LIRE, ÉCRIRE, ou MENU.`);
+    S.screen = 'MAIN_MENU';
+  } catch(e) {
+    speak("Envoi échoué. OUI pour réessayer, NON pour annuler.");
+    S.screen = 'RETRY_SEND';
+  }
+}
+
+function hRetrySend(t) {
+  if (is(t,'OUI')) return doSend();
+  if (is(t,'NON')) { speak('Annulé.'); return setTimeout(goMenu, 1000); }
+  confused(() => speak('OUI pour réessayer, NON pour annuler.'));
+}
+
+function makeRaw(to, subject, body) {
+  const b64subj = '=?UTF-8?B?' + btoa(unescape(encodeURIComponent(subject))) + '?=';
+  const msg = ['To: ' + to, 'Subject: ' + b64subj,
+               'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8', '', body].join('\r\n');
+  return btoa(unescape(encodeURIComponent(msg))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+
+/* ── Recherche ─────────────────────────────────────────────────── */
+
+function goSearchQ() {
+  S.screen = 'SEARCH_QUERY'; S.confusion = 0;
+  speak('Que voulez-vous rechercher ?');
+}
+
+function hSearchQ(t) {
+  if (is(t,'RETOUR')) return goMenu();
+  if (!t || t.trim().length < 2) return confused(() => speak('Dites le nom ou le sujet.'));
+  S.confusion = 0; goSearch(t);
+}
+
+async function goSearch(query) {
+  S.screen = 'LOADING'; speak('Je cherche ' + query + '.');
+  try {
+    const data = await gmail('/messages?maxResults=10&q=' + encodeURIComponent(query));
+    const msgs = data.messages || [];
+    if (!msgs.length) {
+      speak('Aucun résultat. Dites MENU.');
+      S.screen = 'SEARCH_QUERY'; return;
+    }
+    const emails = await Promise.all(msgs.map(m => gmailMeta(m.id)));
+    S.emails = emails; S.idx = 0; S.screen = 'SEARCH_RESULTS'; goList();
+  } catch(e) {
+    speak('Recherche échouée. Dites MENU.'); S.screen = 'SEARCH_QUERY';
+  }
+}
+
+/* ── Gmail API ─────────────────────────────────────────────────── */
+async function gmail(path, method = 'GET', body = null) {
+  const opts = {
+    method,
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+  };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch('https://gmail.googleapis.com/gmail/v1/users/me' + path, opts);
+  if (res.status === 401) {
+    token = null; sessionStorage.clear();
+    speak('Session expirée. Je vous redirige vers Google.');
+    setTimeout(startAuth, 2000);
+    throw new Error('401');
+  }
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  if (res.status === 204) return {};
+  return res.json();
+}
+
+/* ── Initialisation ────────────────────────────────────────────── */
+function id(s) { return document.getElementById(s); }
+
+function init() {
+  _vx = speechSynthesis.getVoices();
+
+  /* 1. Token dans l'URL (retour OAuth) ? */
+  const hash = new URLSearchParams(window.location.hash.replace('#', ''));
+  const hashToken = hash.get('access_token');
+  const expires   = hash.get('expires_in');
+  if (hashToken) {
+    saveToken(hashToken, expires || '3600');
+    history.replaceState(null, '', REDIRECT);
+  }
+
+  /* 2. Token en session ? */
+  if (!token) loadToken();
+
+  /* 3. Micro */
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (SR) { initRec(); S.micOn = true; }
+
+  /* 4. Message de bienvenue */
+  if (token) {
+    speak(
+      `Bonjour ${USER_NAME}. Je suis connecté à Gmail. ` +
+      'Dites LIRE pour vos mails, ÉCRIRE pour en rédiger un, ou CHERCHER.',
+      () => { if (S.micOn) startRec(); S.screen = 'MAIN_MENU'; }
+    );
+  } else {
+    speak(
+      `Bonjour ${USER_NAME}. Je me connecte à Google.`,
+      () => {
+        if (CLIENT_ID === 'VOTRE_CLIENT_ID.apps.googleusercontent.com') {
+          id('auth-btn').style.display = 'block';
+          speak('Client Google non configuré. Veuillez configurer le fichier.');
+          return;
+        }
+        startAuth();
+      }
+    );
+  }
+}
+
+/* Attendre que les voix soient prêtes */
+if (speechSynthesis.getVoices().length > 0) {
+  setTimeout(init, 200);
+} else {
+  speechSynthesis.onvoiceschanged = () => { init(); };
+  setTimeout(init, 1500);
+}
+</script>
+</body>
+</html>
