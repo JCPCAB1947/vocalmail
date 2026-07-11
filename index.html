@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="VocalMail">
+<title>VocalMail</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  #ecran {
+    width: 100vw;
+    height: 100vh;
+    background: #ffffff;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+
+  #ecran.ecoute { background: #fff0f0; }
+  #ecran.parle  { background: #f0fff0; }
+  #ecran:active { background: #f0f0ff; }
+
+  #cercle {
+    width: 200px;
+    height: 200px;
+    border-radius: 50%;
+    background: #2a2aff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 80px;
+    margin-bottom: 2rem;
+    transition: background 0.2s, transform 0.1s;
+    pointer-events: none;
+    box-shadow: 0 8px 32px rgba(42,42,255,0.25);
+  }
+
+  #ecran.ecoute #cercle { background: #ff2a2a; transform: scale(1.05); box-shadow: 0 8px 32px rgba(255,42,42,0.3); }
+  #ecran.parle  #cercle { background: #2aaa2a; box-shadow: 0 8px 32px rgba(42,170,42,0.3); }
+
+  #etat {
+    font-family: -apple-system, sans-serif;
+    font-size: 26px;
+    font-weight: 400;
+    color: #111111;
+    text-align: center;
+    padding: 0 2.5rem;
+    line-height: 1.6;
+    max-width: 600px;
+    pointer-events: none;
+  }
+
+  #transcription {
+    font-family: -apple-system, sans-serif;
+    font-size: 16px;
+    color: #888888;
+    text-align: center;
+    padding: 1.5rem 2rem 0;
+    font-style: italic;
+    min-height: 28px;
+    pointer-events: none;
+  }
+
+  #bouton-google {
+    margin-top: 2rem;
+    padding: 1rem 2rem;
+    font-family: -apple-system, sans-serif;
+    font-size: 18px;
+    font-weight: 500;
+    background: #ffffff;
+    color: #333333;
+    border: 2px solid #dddddd;
+    border-radius: 12px;
+    cursor: pointer;
+    display: none;
+    align-items: center;
+    gap: 12px;
+  }
+
+  #bouton-google.visible { display: flex; }
+
+  #aide {
+    position: fixed;
+    bottom: 1.5rem;
+    font-family: -apple-system, sans-serif;
+    font-size: 13px;
+    color: #aaaaaa;
+    text-align: center;
+    width: 100%;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+
+<div id="ecran" role="button" aria-label="Toucher l'ecran pour parler">
+
+  <div id="cercle">🎤</div>
+
+  <div id="etat">Touchez l'écran pour commencer</div>
+
+  <button id="bouton-google" aria-label="Se connecter avec Google">
+    <svg width="24" height="24" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+    Se connecter avec Google
+  </button>
+
+  <div id="transcription"></div>
+
+</div>
+
+<div id="aide">Touchez n'importe où sur l'écran pour parler</div>
+
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+// ============================================================
+// VOCALMAIL v3 — Connexion Gmail réelle (API Gmail + OAuth Google)
+// ============================================================
+
+const CLIENT_ID = '391707883131-0ocsm9hgh35fl4u191o3c2gf58rp24jf.apps.googleusercontent.com';
+const SCOPES = 'https://www.googleapis.com/auth/gmail.modify https://www.googleapis.com/auth/gmail.send';
+
+// --- ETAT --------------------------------------------------------------------
+let premierToucher     = true;
+let connecte           = false;
+let tokenAcces         = null;
+let clientToken        = null;
+let ecoute             = false;
+let parle              = false;
+let interrompu         = false;
+let reconnaissance     = null;
+let mailsEnCours       = [];
+let indexEnCours       = 0;
+let modeComposition    = false;
+let composition        = { a: '', objet: '', corps: '' };
+let etapeComposition   = '';
+let attendConfirmation = false;
+let carnetContacts     = {};   // nom -> email, appris des mails recus
+
+// --- ELEMENTS ------------------------------------------------------------------
+const ecran        = document.getElementById('ecran');
+const cercle       = document.getElementById('cercle');
+const etatDiv      = document.getElementById('etat');
+const transcDiv    = document.getElementById('transcription');
+const boutonGoogle = document.getElementById('bouton-google');
+
+// --- VOIX ------------------------------------------------------------------------
+function dire(texte, suite) {
+  interrompu = false;
+  window.speechSynthesis.cancel();
+  setTimeout(() => {
+    const u = new SpeechSynthesisUtterance(texte);
+    u.lang  = 'fr-FR';
+    u.rate  = 1.0;
+    u.pitch = 1.0;
+    u.onstart = () => {
+      parle = true;
+      ecran.classList.add('parle');
+      cercle.textContent = '🔊';
+      etatDiv.textContent = texte.length > 200 ? texte.substring(0, 200) + '…' : texte;
+    };
+    u.onend = () => {
+      parle = false;
+      ecran.classList.remove('parle');
+      cercle.textContent = '🎤';
+      if (suite && !interrompu) suite();
+    };
+    window.speechSynthesis.speak(u);
+  }, 120);
+}
+
+function interrompreVoix() {
+  interrompu = true;
+  window.speechSynthesis.cancel();
+  parle = false;
+  ecran.classList.remove('parle');
+  cercle.textContent = '🎤';
+}
+
+// --- CONNEXION GOOGLE ---------------------------------------------------------------
+function initGoogle() {
+  if (!window.google || !google.accounts) {
+    setTimeout(initGoogle, 300);
+    return;
+  }
+  clientToken = google.accounts.oauth2.initTokenClient({
+    client_id: CLIENT_ID,
+    scope: SCOPES,
+    callback: (reponse) => {
+      if (reponse && reponse.access_token) {
+        tokenAcces = reponse.access_token;
+        connecte = true;
+        boutonGoogle.classList.remove('visible');
+        dire("Connexion réussie. Touchez l'écran et dites : mes mails, ou aide.");
+      } else {
+        dire("La connexion a échoué. Touchez le bouton pour réessayer.");
+      }
+    },
+    error_callback: () => {
+      dire("La connexion a été annulée. Touchez le bouton Se connecter avec Google pour réessayer.");
+    }
+  });
+}
+
+boutonGoogle.addEventListener('click', (e) => {
+  e.stopPropagation();
+  if (clientToken) {
+    clientToken.requestAccessToken();
+  } else {
+    dire("Le service Google n'est pas encore chargé. Patientez deux secondes et réessayez.");
+  }
+});
+
+// --- API GMAIL -------------------------------------------------------------------------
+async function apiGmail(chemin, options = {}) {
+  const reponse = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/' + chemin, {
+    ...options,
+    headers: {
+      'Authorization': 'Bearer ' + tokenAcces,
+      'Content-Type': 'application/json',
+      ...(options.headers || {})
+    }
+  });
+  if (reponse.status === 401) {
+    connecte = false;
+    tokenAcces = null;
+    boutonGoogle.classList.add('visible');
+    throw new Error('SESSION_EXPIREE');
+  }
+  if (!reponse.ok) throw new Error('ERREUR_API_' + reponse.status);
+  return reponse.json();
+}
+
+function decoderBase64(donnees) {
+  try {
+    return decodeURIComponent(escape(atob(donnees.replace(/-/g, '+').replace(/_/g, '/'))));
+  } catch (e) { return ''; }
+}
+
+function extraireCorps(charge) {
+  if (!charge) return '';
+  if (charge.mimeType === 'text/plain' && charge.body && charge.body.data) {
+    return decoderBase64(charge.body.data);
+  }
+  if (charge.parts) {
+    for (const partie of charge.parts) {
+      const texte = extraireCorps(partie);
+      if (texte) return texte;
+    }
+  }
+  if (charge.body && charge.body.data) {
+    return decoderBase64(charge.body.data).replace(/<[^>]+>/g, ' ');
+  }
+  return '';
+}
+
+function nettoyerCorps(texte) {
+  return texte
+    .replace(/https?:\/\/\S+/g, ' lien ')
+    .replace(/\r?\n{2,}/g, '. ')
+    .replace(/\r?\n/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/[_*#>|=-]{3,}/g, ' ')
+    .trim()
+    .substring(0, 1200);
+}
+
+function extraireEntete(message, nom) {
+  const entetes = (message.payload && message.payload.headers) || [];
+  const trouve = entetes.find(h => h.name.toLowerCase() === nom.toLowerCase());
+  return trouve ? trouve.value : '';
+}
+
+function nomExpediteur(de) {
+  const match = de.match(/^"?([^"<]+)"?\s*</);
+  return match ? match[1].trim() : de.split('@')[0];
+}
+
+function emailExpediteur(de) {
+  const match = de.match(/<([^>]+)>/);
+  return match ? match[1] : de.trim();
+}
+
+async function chargerMails(requete, intro) {
+  dire("Je consulte votre boîte, un instant.");
+  try {
+    const liste = await apiGmail('messages?maxResults=15&q=' + encodeURIComponent(requete || 'in:inbox'));
+    if (!liste.messages || liste.messages.length === 0) {
+      dire("Aucun mail trouvé.");
+      return;
+    }
+    const details = await Promise.all(
+      liste.messages.slice(0, 10).map(m => apiGmail('messages/' + m.id + '?format=full'))
+    );
+    mailsEnCours = details.map(msg => {
+      const de = extraireEntete(msg, 'From');
+      const nom = nomExpediteur(de);
+      const email = emailExpediteur(de);
+      carnetContacts[nom.toLowerCase()] = email;
+      const prenomSeul = nom.split(' ')[0].toLowerCase();
+      if (prenomSeul.length > 2) carnetContacts[prenomSeul] = email;
+      return {
+        id: msg.id,
+        threadId: msg.threadId,
+        de: nom,
+        email: email,
+        objet: extraireEntete(msg, 'Subject') || 'sans objet',
+        corps: nettoyerCorps(extraireCorps(msg.payload)) || 'Le contenu de ce mail ne peut pas être lu à voix haute.',
+        nonLu: (msg.labelIds || []).includes('UNREAD')
+      };
+    });
+    indexEnCours = 0;
+    dire(intro + ' ' + mailsEnCours.length + ' mail' + (mailsEnCours.length > 1 ? 's' : '') + '.', () => lireUnMail(mailsEnCours[0]));
+  } catch (err) {
+    if (err.message === 'SESSION_EXPIREE') {
+      dire("Votre session a expiré. Touchez le bouton Se connecter avec Google.");
+    } else {
+      dire("Je n'arrive pas à joindre Gmail. Vérifiez la connexion internet et réessayez.");
+    }
+  }
+}
+
+async function marquerCommeLu(mail) {
+  if (!mail.nonLu) return;
+  try {
+    await apiGmail('messages/' + mail.id + '/modify', {
+      method: 'POST',
+      body: JSON.stringify({ removeLabelIds: ['UNREAD'] })
+    });
+    mail.nonLu = false;
+  } catch (e) {}
+}
+
+async function supprimerMail(mail) {
+  await apiGmail('messages/' + mail.id + '/trash', { method: 'POST' });
+}
+
+async function envoyerMail(a, objet, corps) {
+  const destinataire = carnetContacts[a.toLowerCase()] || a;
+  if (!destinataire.includes('@')) {
+    throw new Error('DESTINATAIRE_INCONNU');
+  }
+  const brut =
+    'To: ' + destinataire + '\r\n' +
+    'Subject: =?UTF-8?B?' + btoa(unescape(encodeURIComponent(objet))) + '?=\r\n' +
+    'Content-Type: text/plain; charset=UTF-8\r\n' +
+    'Content-Transfer-Encoding: base64\r\n\r\n' +
+    btoa(unescape(encodeURIComponent(corps)));
+  const encode = btoa(brut).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  await apiGmail('messages/send', {
+    method: 'POST',
+    body: JSON.stringify({ raw: encode })
+  });
+  return destinataire;
+}
+
+// --- TOUCHER = LE SEUL GESTE -------------------------------------------------------
+ecran.addEventListener('click', gererToucher);
+
+function gererToucher() {
+  if (premierToucher) {
+    premierToucher = false;
+    if (!connecte) {
+      boutonGoogle.classList.add('visible');
+      dire("Bienvenue dans VocalMail. Pour lire vos mails, il faut d'abord connecter votre compte Google. Touchez le bouton Se connecter avec Google au centre de l'écran.");
+    }
+    return;
+  }
+
+  if (parle) {
+    interrompreVoix();
+    if (connecte) demarrerEcoute();
+    return;
+  }
+
+  if (!connecte) {
+    dire("Vous n'êtes pas encore connecté. Touchez le bouton Se connecter avec Google.");
+    return;
+  }
+
+  if (ecoute) { arreterEcoute(); } else { demarrerEcoute(); }
+}
+
+// --- MICRO --------------------------------------------------------------------------
+function demarrerEcoute() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    dire("La reconnaissance vocale n'est pas disponible sur ce navigateur. Veuillez utiliser Safari.");
+    return;
+  }
+  reconnaissance = new SR();
+  reconnaissance.lang = 'fr-FR';
+  reconnaissance.continuous = false;
+  reconnaissance.interimResults = false;
+
+  reconnaissance.onstart = () => {
+    ecoute = true;
+    ecran.classList.add('ecoute');
+    cercle.textContent = '👂';
+    etatDiv.textContent = 'Je vous écoute…';
+  };
+
+  reconnaissance.onresult = (e) => {
+    const brut = e.results[0][0].transcript.trim().toLowerCase();
+    const texte = normaliser(brut);
+    transcDiv.textContent = '« ' + brut + ' »';
+    arreterEcoute();
+    traiterCommande(texte);
+  };
+
+  reconnaissance.onerror = (e) => {
+    arreterEcoute();
+    if (e.error === 'no-speech') {
+      dire("Je n'ai rien entendu. Touchez l'écran et parlez après le signal.");
+    } else if (e.error === 'not-allowed') {
+      dire("L'accès au microphone est refusé. Autorisez le micro dans les réglages de Safari.");
+    } else {
+      dire("Je n'ai pas compris. Touchez l'écran et réessayez.");
+    }
+  };
+
+  reconnaissance.onend = () => { arreterEcoute(); };
+
+  try { reconnaissance.start(); }
+  catch(err) { arreterEcoute(); }
+}
+
+function arreterEcoute() {
+  ecoute = false;
+  if (reconnaissance) {
+    try { reconnaissance.stop(); } catch(e) {}
+    reconnaissance = null;
+  }
+  ecran.classList.remove('ecoute');
+  if (!parle) cercle.textContent = '🎤';
+}
+
+// --- NORMALISATION ------------------------------------------------------------------
+function normaliser(t) {
+  return t
+    .replace(/e-mails?/g, 'mail')
+    .replace(/emails?/g, 'mail')
+    .replace(/émails?/g, 'mail')
+    .replace(/courriels?/g, 'mail')
+    .replace(/mels?\b/g, 'mail')
+    .replace(/messages?/g, 'mail');
+}
+
+// --- COMMANDES ---------------------------------------------------------------------------
+function traiterCommande(cmd) {
+
+  // ANNULER — prioritaire, disponible partout
+  if (cmd.includes('annul') || cmd.includes('stop') || cmd.includes('laisse tomber')) {
+    if (modeComposition || attendConfirmation) {
+      modeComposition = false;
+      attendConfirmation = false;
+      composition = { a: '', objet: '', corps: '' };
+      etapeComposition = '';
+      dire("D'accord, j'annule le mail en cours. Que voulez-vous faire ?");
+    } else {
+      dire("D'accord. Que voulez-vous faire ?");
+    }
+    return;
+  }
+
+  // CONFIRMATION ENVOI
+  if (attendConfirmation) {
+    if (cmd.includes('oui') || cmd.includes('confirme') || cmd.includes('envoi')) {
+      attendConfirmation = false;
+      dire("Envoi en cours.");
+      envoyerMail(composition.a, composition.objet, composition.corps)
+        .then((dest) => {
+          modeComposition = false;
+          composition = { a: '', objet: '', corps: '' };
+          etapeComposition = '';
+          dire("Mail envoyé à " + dest + ".");
+        })
+        .catch((err) => {
+          if (err.message === 'DESTINATAIRE_INCONNU') {
+            etapeComposition = 'destinataire';
+            attendConfirmation = false;
+            dire("Je ne connais pas l'adresse de " + composition.a + ". Touchez l'écran et épelez l'adresse mail complète, ou dites annuler.");
+          } else {
+            dire("L'envoi a échoué. Touchez l'écran et dites OUI pour réessayer, ou NON pour annuler.");
+            attendConfirmation = true;
+          }
+        });
+    } else if (cmd.includes('non')) {
+      attendConfirmation = false;
+      modeComposition = false;
+      composition = { a: '', objet: '', corps: '' };
+      etapeComposition = '';
+      dire("Envoi annulé. Le mail n'a pas été envoyé.");
+    } else {
+      dire("Dites OUI pour envoyer, ou NON pour annuler.");
+    }
+    return;
+  }
+
+  // MODE COMPOSITION
+  if (modeComposition) {
+    traiterComposition(cmd);
+    return;
+  }
+
+  // AIDE
+  if (cmd.includes('aide') || cmd.includes('quoi dire') || cmd.includes('commande')) {
+    dire("Voici les commandes. Mes mails : pour entendre votre boîte de réception. Mes trois derniers mails. Mes mails non lus. Mails de Marie : pour les mails d'une personne. Écrire un mail. Suivant. Précédent. Répéter. Répondre. Supprimer. Et annuler, à tout moment.");
+    return;
+  }
+
+  // ECRIRE
+  if (cmd.includes('écrire') || cmd.includes('ecrire') || cmd.includes('composer') ||
+      cmd.includes('rédiger') || cmd.includes('rediger') || cmd.includes('nouveau mail') ||
+      cmd.includes('envoyer un mail')) {
+    modeComposition = true;
+    composition = { a: '', objet: '', corps: '' };
+    etapeComposition = 'destinataire';
+    dire("À qui voulez-vous écrire ? Touchez l'écran et dites le nom d'une personne qui vous a déjà écrit, ou épelez une adresse mail. Ou dites annuler.");
+    return;
+  }
+
+  // MES X DERNIERS MAILS
+  const matchNombre = cmd.match(/(\d+|un|deux|trois|quatre|cinq|six|sept|huit|neuf|dix)\s+derniers?\s+mails?/);
+  if (matchNombre) {
+    const n = convertirNombre(matchNombre[1]);
+    chargerMailsLimite('in:inbox', 'Voici vos derniers mails.', n);
+    return;
+  }
+
+  // MAILS NON LUS
+  if (cmd.includes('non lu') || cmd.includes('pas lu') || cmd.includes('nouveaux') || cmd.includes('nouveau')) {
+    chargerMails('in:inbox is:unread', 'Mails non lus :');
+    return;
+  }
+
+  // MAILS DE [NOM]
+  const matchDe = cmd.match(/mails?\s+d[e']\s*([a-zà-öø-ÿ]+(?:\s+[a-zà-öø-ÿ]+)?)/i);
+  if (matchDe) {
+    const nom = matchDe[1].trim();
+    chargerMails('in:inbox from:' + nom, 'Mails de ' + nom + ' :');
+    return;
+  }
+
+  // TOUS LES MAILS
+  if (cmd.includes('mes mails') || cmd.includes('ma boite') || cmd.includes('ma boîte') ||
+      cmd.includes('tous les mails') || cmd.includes('toute la boite') || cmd.includes('toute la boîte') ||
+      cmd.includes('lire les mails') || cmd.includes('lis les mails')) {
+    chargerMails('in:inbox', 'Boîte de réception :');
+    return;
+  }
+
+  // SUIVANT
+  if (cmd.includes('suivant') || cmd.includes('prochain') || cmd.includes('après') || cmd.includes('apres')) {
+    if (mailsEnCours.length === 0) { dire("Aucune liste en cours. Dites d'abord : mes mails."); return; }
+    if (indexEnCours < mailsEnCours.length - 1) {
+      indexEnCours++;
+      lireUnMail(mailsEnCours[indexEnCours]);
+    } else {
+      dire("C'est le dernier mail de la liste.");
+    }
+    return;
+  }
+
+  // PRECEDENT
+  if (cmd.includes('précédent') || cmd.includes('precedent') || cmd.includes('retour') || cmd.includes('reviens')) {
+    if (mailsEnCours.length === 0) { dire("Aucune liste en cours. Dites d'abord : mes mails."); return; }
+    if (indexEnCours > 0) {
+      indexEnCours--;
+      lireUnMail(mailsEnCours[indexEnCours]);
+    } else {
+      dire("C'est le premier mail de la liste.");
+    }
+    return;
+  }
+
+  // REPETER
+  if (cmd.includes('répète') || cmd.includes('repete') || cmd.includes('répéter') ||
+      cmd.includes('repeter') || cmd.includes('recommence') || cmd.includes('encore')) {
+    if (mailsEnCours.length > 0 && mailsEnCours[indexEnCours]) {
+      lireUnMail(mailsEnCours[indexEnCours]);
+    } else {
+      dire("Aucun mail en cours de lecture.");
+    }
+    return;
+  }
+
+  // REPONDRE
+  if (cmd.includes('répond') || cmd.includes('repond') || cmd.includes('réponse') || cmd.includes('reponse')) {
+    if (mailsEnCours.length === 0 || !mailsEnCours[indexEnCours]) {
+      dire("Aucun mail sélectionné. Dites d'abord : mes mails.");
+      return;
+    }
+    const m = mailsEnCours[indexEnCours];
+    composition.a = m.email;
+    composition.objet = 'Re : ' + m.objet;
+    composition.corps = '';
+    modeComposition = true;
+    etapeComposition = 'corps';
+    dire("Réponse à " + m.de + ". Touchez l'écran et dictez votre message. Ou dites annuler.");
+    return;
+  }
+
+  // SUPPRIMER
+  if (cmd.includes('supprim') || cmd.includes('efface') || cmd.includes('corbeille') || cmd.includes('poubelle')) {
+    if (mailsEnCours.length === 0 || !mailsEnCours[indexEnCours]) {
+      dire("Aucun mail sélectionné.");
+      return;
+    }
+    const m = mailsEnCours[indexEnCours];
+    dire("Suppression en cours.");
+    supprimerMail(m)
+      .then(() => {
+        mailsEnCours.splice(indexEnCours, 1);
+        if (indexEnCours >= mailsEnCours.length) indexEnCours = Math.max(0, mailsEnCours.length - 1);
+        if (mailsEnCours.length > 0) {
+          dire("Mail de " + m.de + " mis à la corbeille. Il reste " + mailsEnCours.length + " mail" + (mailsEnCours.length > 1 ? 's' : '') + ". Dites suivant pour continuer.");
+        } else {
+          dire("Mail de " + m.de + " mis à la corbeille. La liste est vide.");
+        }
+      })
+      .catch(() => {
+        dire("La suppression a échoué. Réessayez.");
+      });
+    return;
+  }
+
+  dire("Je n'ai pas compris. Dites aide pour connaître les commandes.");
+}
+
+async function chargerMailsLimite(requete, intro, n) {
+  dire("Je consulte votre boîte, un instant.");
+  try {
+    const liste = await apiGmail('messages?maxResults=' + n + '&q=' + encodeURIComponent(requete));
+    if (!liste.messages || liste.messages.length === 0) {
+      dire("Aucun mail trouvé.");
+      return;
+    }
+    const details = await Promise.all(
+      liste.messages.map(m => apiGmail('messages/' + m.id + '?format=full'))
+    );
+    mailsEnCours = details.map(msg => {
+      const de = extraireEntete(msg, 'From');
+      const nom = nomExpediteur(de);
+      const email = emailExpediteur(de);
+      carnetContacts[nom.toLowerCase()] = email;
+      const prenomSeul = nom.split(' ')[0].toLowerCase();
+      if (prenomSeul.length > 2) carnetContacts[prenomSeul] = email;
+      return {
+        id: msg.id,
+        threadId: msg.threadId,
+        de: nom,
+        email: email,
+        objet: extraireEntete(msg, 'Subject') || 'sans objet',
+        corps: nettoyerCorps(extraireCorps(msg.payload)) || 'Le contenu de ce mail ne peut pas être lu à voix haute.',
+        nonLu: (msg.labelIds || []).includes('UNREAD')
+      };
+    });
+    indexEnCours = 0;
+    dire(intro + ' ' + mailsEnCours.length + ' mail' + (mailsEnCours.length > 1 ? 's' : '') + '.', () => lireUnMail(mailsEnCours[0]));
+  } catch (err) {
+    if (err.message === 'SESSION_EXPIREE') {
+      dire("Votre session a expiré. Touchez le bouton Se connecter avec Google.");
+    } else {
+      dire("Je n'arrive pas à joindre Gmail. Vérifiez la connexion internet.");
+    }
+  }
+}
+
+// --- COMPOSITION ---------------------------------------------------------------------------
+function traiterComposition(cmd) {
+  if (etapeComposition === 'destinataire') {
+    // Nettoyage adresse epelee ("arobase" -> @, "point" -> .)
+    let dest = cmd
+      .replace(/\s*arobase\s*/g, '@')
+      .replace(/\s*point\s*/g, '.')
+      .replace(/\s+/g, '');
+    if (!dest.includes('@')) dest = cmd.trim();
+    composition.a = dest;
+    etapeComposition = 'objet';
+    dire("Destinataire : " + composition.a + ". Touchez l'écran et dites l'objet du mail.");
+  } else if (etapeComposition === 'objet') {
+    composition.objet = cmd;
+    etapeComposition = 'corps';
+    dire("Objet : " + cmd + ". Touchez l'écran et dictez votre message.");
+  } else if (etapeComposition === 'corps') {
+    composition.corps = cmd.charAt(0).toUpperCase() + cmd.slice(1);
+    etapeComposition = '';
+    attendConfirmation = true;
+    dire("Votre mail est prêt. À : " + composition.a + ". Objet : " + composition.objet + ". Message : " + composition.corps + ". Touchez l'écran et dites OUI pour envoyer, ou NON pour annuler.");
+  }
+}
+
+// --- LECTURE -----------------------------------------------------------------------------------
+function lireUnMail(mail) {
+  if (!mail) { dire("Aucun mail à lire."); return; }
+  marquerCommeLu(mail);
+  const pos = "Mail " + (indexEnCours + 1) + " sur " + mailsEnCours.length + ".";
+  const nouveau = mail.nonLu ? " Nouveau." : "";
+  const texte = pos + nouveau + " De : " + mail.de + ". Objet : " + mail.objet + ". Message : " + mail.corps + " Touchez l'écran pour dire : suivant, répéter, répondre ou supprimer.";
+  dire(texte);
+}
+
+// --- UTILITAIRE ----------------------------------------------------------------------------------
+function convertirNombre(s) {
+  const mots = { un:1, deux:2, trois:3, quatre:4, cinq:5, six:6, sept:7, huit:8, neuf:9, dix:10 };
+  return mots[s] || parseInt(s) || 3;
+}
+
+// --- DEMARRAGE -----------------------------------------------------------------------------------
+window.addEventListener('load', initGoogle);
+</script>
+</body>
+</html>
