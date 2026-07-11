@@ -27,7 +27,7 @@
 
 <script>
 /* ================================================================
-   VOCALMAIL v9.3 — Interface 100 % vocale
+   VOCALMAIL v9.5 — Interface 100 % vocale
    Écran noir + cercle blanc. Toucher l'écran pour démarrer.
    Connexion au Worker Cloudflare — clé permanente, zéro authentification.
    ================================================================ */
@@ -205,6 +205,24 @@ function cleanTxt(txt) {
   return txt.replace(/\s+/g, ' ').replace(/(.{400}).+/, '$1…').trim();
 }
 
+/* Si le corps commence par l'objet (newsletters), ne pas le relire */
+function dedupSubject(subject, body) {
+  if (!subject || !body) return body;
+  const ns = N(subject).replace(/^re\s*/,''), nb = N(body);
+  if (ns && nb.startsWith(ns)) {
+    /* avancer dans le corps réel jusqu'à avoir couvert toutes les lettres de l'objet */
+    const target = ns.replace(/ /g, '').length;
+    let cut = 0, matched = 0;
+    for (let i = 0; i < body.length && matched < target; i++) {
+      const c = N(body[i]).replace(/ /g, '');
+      matched += c.length;
+      cut = i + 1;
+    }
+    return body.slice(cut).replace(/^[\s:,.–—-]+/, '');
+  }
+  return body;
+}
+
 function spellAddr(e) {
   if (!e) return 'adresse inconnue';
   return [...e].map(c => ({ '@': 'arobase', '.': 'point', '-': 'tiret', '_': 'tiret bas' }[c] || c)).join(' ');
@@ -232,9 +250,10 @@ function onUtterance(t) {
   console.log('⟫ ' + t);
   /* Pendant TTS : ignorer sauf interruptions en lecture */
   if (S.talking) {
-    if (S.screen === 'READING_EMAIL' && (is(t,'STOP') || is(t,'SUITE') || is(t,'RETOUR'))) {
-      stopTTS(); S.screen = 'EMAIL_ACTIONS';
-      speak('Relire, suivant, ou répondre ?');
+    if (S.screen === 'READING_EMAIL') {
+      if (is(t,'STOP') || is(t,'RETOUR')) { stopTTS(); return goMenu(); }
+      if (is(t,'SUITE'))  { stopTTS(); return goNextEmail(); }
+      if (is(t,'RELIRE')) { stopTTS(); return goReadEmail(S.idx); }
     }
     return;
   }
@@ -342,7 +361,7 @@ async function goReadEmail(idx) {
     S.mail = m;
     S.screen = 'READING_EMAIL';
     speak(
-      `Objet : ${m.subject}. Message : ${cleanTxt(m.body)}`,
+      `Objet : ${m.subject}. Message : ${dedupSubject(m.subject, cleanTxt(m.body))}`,
       () => {
         if (S.screen === 'READING_EMAIL') {
           S.screen = 'EMAIL_ACTIONS';
@@ -361,10 +380,9 @@ async function goReadEmail(idx) {
 
 
 function hReading(t) {
-  if (is(t,'STOP') || is(t,'SUITE') || is(t,'RETOUR')) {
-    stopTTS(); S.screen = 'EMAIL_ACTIONS';
-    speak('Relire, suivant, ou répondre ?');
-  }
+  if (is(t,'STOP') || is(t,'RETOUR')) { stopTTS(); return goMenu(); }
+  if (is(t,'SUITE'))  { stopTTS(); return goNextEmail(); }
+  if (is(t,'RELIRE')) { stopTTS(); return goReadEmail(S.idx); }
 }
 
 function hActions(t) {
@@ -372,7 +390,7 @@ function hActions(t) {
   if (is(t,'RELIRE'))   return goReadEmail(S.idx);
   if (is(t,'REPONDRE')) return goReply();
   if (is(t,'SUITE'))    return goNextEmail();
-  if (is(t,'RETOUR'))   return goMenu();
+  if (is(t,'RETOUR') || is(t,'STOP')) return goMenu();
   if (is(t,'ECRIRE'))   return goComposeRecipient();
   confused(() => speak('Relire, suivant, ou répondre ?'));
 }
