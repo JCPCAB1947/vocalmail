@@ -27,7 +27,7 @@
 
 <script>
 /* ================================================================
-   VOCALMAIL v9.2 — Interface 100 % vocale
+   VOCALMAIL v9.3 — Interface 100 % vocale
    Écran noir + cercle blanc. Toucher l'écran pour démarrer.
    Connexion au Worker Cloudflare — clé permanente, zéro authentification.
    ================================================================ */
@@ -188,6 +188,10 @@ const ord = n => ORD[n-1] || String(n);
 /* ── Nettoyage email ───────────────────────────────────────────── */
 function cleanTxt(txt) {
   if (!txt) return '';
+  /* Arrêt à la formule de politesse : la suite n'est que signature */
+  const politesse = /((?:bien |très |tres )?cordialement|amicalement|bien à (?:vous|toi)|sincères salutations|sinceres salutations|salutations (?:distinguées|distinguees|respectueuses)|respectueusement|amitiés|amities|bises|bisous)/i;
+  const pm = txt.match(politesse);
+  if (pm) txt = txt.slice(0, pm.index + pm[0].length);
   txt = txt.replace(/<[^>]+>/g, ' ');
   txt = txt.replace(/https?:\/\/\S+/g, '');
   txt = txt.replace(/www\.\S+/g, '');
@@ -338,7 +342,7 @@ async function goReadEmail(idx) {
     S.mail = m;
     S.screen = 'READING_EMAIL';
     speak(
-      `De ${m.from_name}. Objet : ${m.subject}. Message : ${cleanTxt(m.body)}`,
+      `Objet : ${m.subject}. Message : ${cleanTxt(m.body)}`,
       () => {
         if (S.screen === 'READING_EMAIL') {
           S.screen = 'EMAIL_ACTIONS';
