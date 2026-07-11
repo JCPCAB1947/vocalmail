@@ -5,31 +5,31 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>VocalMail</title>
 <style>
-  /* Interface UNIQUEMENT vocale — rien à voir, tout à entendre */
-  body { margin:0; background:#000; display:flex; align-items:center; justify-content:center; min-height:100vh; }
-  #auth-btn {
-    display:none;
-    padding:28px 56px; font-size:24px; font-family:system-ui,sans-serif;
-    background:#1a73e8; color:#fff; border:none; border-radius:12px;
-    cursor:pointer; outline:3px solid #fff;
+  /* Écran noir + cercle micro blanc. Toucher l'écran = seul geste. */
+  html,body { margin:0; height:100%; background:#000; }
+  body { display:flex; align-items:center; justify-content:center;
+         cursor:pointer; -webkit-tap-highlight-color:transparent; user-select:none; }
+  #circle {
+    width:180px; height:180px; border-radius:50%;
+    background:#fff; display:flex; align-items:center; justify-content:center;
   }
-  #auth-btn:focus { outline:4px solid #FF0; }
+  #circle svg { width:90px; height:90px; fill:#000; }
+  #circle.pulse { animation:pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{transform:scale(1);opacity:1;} 50%{transform:scale(1.08);opacity:.85;} }
 </style>
 </head>
 <body>
 
-<!-- Seul élément visuel : bouton d'autorisation Gmail, affiché uniquement si nécessaire -->
-<button id="auth-btn" onclick="startAuth()">
-  Appuyer pour autoriser Gmail
-</button>
+<!-- Cercle micro blanc — unique élément visuel -->
+<div id="circle">
+  <svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
+</div>
 
 <script>
 /* ================================================================
-   VOCALMAIL v8.0 — Interface 100 % vocale
-   Connexion directe à Gmail via Google OAuth
-   ================================================================
-   CONFIGURATION : remplacez CLIENT_ID par votre identifiant Google
-   Google Cloud Console > API & Services > Identifiants > OAuth 2.0
+   VOCALMAIL v8.1 — Interface 100 % vocale
+   Écran noir + cercle blanc. Toucher l'écran pour démarrer.
+   Connexion directe à Gmail via Google OAuth.
    ================================================================ */
 
 const CLIENT_ID  = '391707883131-0ocsm9hgh35fl4u191o3c2gf58rp24jf.apps.googleusercontent.com';
@@ -54,7 +54,6 @@ function loadToken() {
 }
 
 function startAuth() {
-  id('auth-btn').style.display = 'none';
   const p = new URLSearchParams({
     client_id: CLIENT_ID,
     redirect_uri: REDIRECT,
@@ -343,13 +342,21 @@ async function goReadEmail(idx) {
   }
 }
 
+function b64decode(data) {
+  /* base64url → UTF-8 correct (accents français) */
+  const bin = atob(data.replace(/-/g, '+').replace(/_/g, '/'));
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder('utf-8').decode(bytes);
+}
+
 function extractBody(payload) {
   if (!payload) return '';
-  if (payload.body?.data) return atob(payload.body.data.replace(/-/g, '+').replace(/_/g, '/'));
+  if (payload.body?.data) return b64decode(payload.body.data);
   if (payload.parts) {
     for (const p of payload.parts) {
       if (p.mimeType === 'text/plain' && p.body?.data)
-        return atob(p.body.data.replace(/-/g, '+').replace(/_/g, '/'));
+        return b64decode(p.body.data);
     }
     for (const p of payload.parts) { const s = extractBody(p); if (s) return s; }
   }
@@ -407,14 +414,18 @@ async function hRecipient(t) {
   }
   speak(`Je cherche ${t}.`);
   try {
-    const r = await fetch(
-      `https://people.googleapis.com/v1/people:searchDirectoryPeople?query=${encodeURIComponent(t)}&readMask=names,emailAddresses&sources=DIRECTORY_SOURCE_TYPE_DOMAIN_CONTACT`,
-      { headers: { Authorization: 'Bearer ' + token } }
-    );
-    const data = await r.json();
-    const contacts = (data.people || [])
-      .map(p => ({ name: p.names?.[0]?.displayName || t, email: p.emailAddresses?.[0]?.value || '' }))
-      .filter(c => c.email);
+    /* Recherche dans l'historique Gmail — fonctionne pour tout compte,
+       aucun scope supplémentaire nécessaire */
+    const data = await gmail('/messages?maxResults=15&q=' + encodeURIComponent(t));
+    const msgs = data.messages || [];
+    const seen = {};
+    for (const m of msgs.slice(0, 15)) {
+      const meta = await gmailMeta(m.id);
+      const em = (meta.from_email.match(/<([^>]+)>/) || [null, meta.from_email])[1].trim();
+      if (em && !seen[em] && N(meta.from_name).includes(N(t).split(' ')[0]))
+        seen[em] = { name: meta.from_name, email: em };
+    }
+    const contacts = Object.values(seen).slice(0, 5);
     if (!contacts.length) {
       speak(`${t} non trouvé. Dites l'adresse e-mail directement, ou RETOUR.`);
       S.screen = 'COMPOSE_RECIPIENT'; return;
@@ -583,54 +594,50 @@ async function gmail(path, method = 'GET', body = null) {
 /* ── Initialisation ────────────────────────────────────────────── */
 function id(s) { return document.getElementById(s); }
 
-function init() {
-  _vx = speechSynthesis.getVoices();
+/* Le démarrage exige un toucher de l'écran (règle Chrome : voix et
+   micro n'ont le droit de fonctionner qu'après un geste utilisateur). */
 
-  /* 1. Token dans l'URL (retour OAuth) ? */
+let started = false;
+
+function boot() {
+  if (started) return;   /* verrou : une seule exécution */
+  started = true;
+  _vx = speechSynthesis.getVoices();
+  id('circle').classList.add('pulse');
+
+  /* 1. Récupérer le token */
   const hash = new URLSearchParams(window.location.hash.replace('#', ''));
   const hashToken = hash.get('access_token');
-  const expires   = hash.get('expires_in');
   if (hashToken) {
-    saveToken(hashToken, expires || '3600');
+    saveToken(hashToken, hash.get('expires_in') || '3600');
     history.replaceState(null, '', REDIRECT);
   }
-
-  /* 2. Token en session ? */
   if (!token) loadToken();
 
-  /* 3. Micro */
+  /* 2. Micro */
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (SR) { initRec(); S.micOn = true; }
 
-  /* 4. Message de bienvenue */
+  /* 3. Connecté ou pas ? */
   if (token) {
     speak(
-      `Bonjour ${USER_NAME}. Je suis connecté à Gmail. ` +
-      'Dites LIRE pour vos mails, ÉCRIRE pour en rédiger un, ou CHERCHER.',
-      () => { if (S.micOn) startRec(); S.screen = 'MAIN_MENU'; }
+      `Bonjour ${USER_NAME}. Connecté à Gmail. Dites LIRE, ÉCRIRE, ou CHERCHER.`,
+      () => { S.screen = 'MAIN_MENU'; }
     );
   } else {
-    speak(
-      `Bonjour ${USER_NAME}. Je me connecte à Google.`,
-      () => {
-        if (CLIENT_ID === 'VOTRE_CLIENT_ID.apps.googleusercontent.com') {
-          id('auth-btn').style.display = 'block';
-          speak('Client Google non configuré. Veuillez configurer le fichier.');
-          return;
-        }
-        startAuth();
-      }
-    );
+    speak('Connexion Google.');
+    /* Redirection avec délai fixe — ne dépend PAS du onend de la voix
+       (le onend de Chrome est parfois muet, cause du blocage v8.0) */
+    setTimeout(startAuth, 2500);
   }
 }
 
-/* Attendre que les voix soient prêtes */
-if (speechSynthesis.getVoices().length > 0) {
-  setTimeout(init, 200);
-} else {
-  speechSynthesis.onvoiceschanged = () => { init(); };
-  setTimeout(init, 1500);
-}
+/* Toucher n'importe où sur l'écran = démarrer.
+   TOUJOURS exigé, y compris au retour de Google : le retour est un
+   nouveau chargement de page, donc l'iPhone exige un nouveau geste
+   avant d'autoriser la voix. Une seule règle : toucher l'écran. */
+document.body.addEventListener('click',  boot);
+document.body.addEventListener('touchend', boot);
 </script>
 </body>
 </html>
