@@ -27,7 +27,7 @@
 
 <script>
 /* ================================================================
-   VOCALMAIL v9.7 — Interface 100 % vocale
+   VOCALMAIL v9.8 — Interface 100 % vocale
    Écran noir + cercle blanc. Toucher l'écran pour démarrer.
    Connexion au Worker Cloudflare — clé permanente, zéro authentification.
    ================================================================ */
@@ -55,8 +55,11 @@ async function api(path, method = 'GET', body = null) {
 let _vx = [], _q = [], _spk = false;
 speechSynthesis.onvoiceschanged = () => { _vx = speechSynthesis.getVoices(); };
 
+let _lastSpoken = '';
+
 function speak(txt, then) {
   if (!txt) return;
+  _lastSpoken = txt;
   _q.push({ txt, then });
   if (!_spk) _flush();
 }
@@ -88,9 +91,19 @@ function stopTTS() {
 /* Bip court — accusé de réception pendant la dictée.
    Ne coupe le micro qu'un instant, contrairement à une phrase parlée. */
 let _actx = null;
-function beep() {
+
+function initAudio() {
+  /* À appeler DANS le geste du toucher (exigence iOS) */
   try {
     if (!_actx) _actx = new (window.AudioContext || window.webkitAudioContext)();
+    if (_actx.state === 'suspended') _actx.resume();
+  } catch(e) {}
+}
+
+function beep() {
+  try {
+    if (!_actx) return;
+    if (_actx.state === 'suspended') _actx.resume();
     const o = _actx.createOscillator(), g = _actx.createGain();
     o.connect(g); g.connect(_actx.destination);
     o.frequency.value = 880; g.gain.value = 0.15;
@@ -255,6 +268,11 @@ const DISPATCH = {
 
 function onUtterance(t) {
   console.log('⟫ ' + t);
+  /* ANTI-ÉCHO : si l'énoncé est un fragment de la dernière phrase
+     prononcée par la voix de synthèse, c'est le micro qui s'entend
+     lui-même — on ignore. */
+  const nt = N(t);
+  if (nt.length > 5 && N(_lastSpoken).includes(nt)) return;
   /* Pendant TTS : ignorer sauf interruptions en lecture */
   if (S.talking) {
     if (S.screen === 'READING_EMAIL') {
@@ -510,7 +528,7 @@ function goComposeBody() {
 }
 
 function hBody(t) {
-  if (is(t,'TERMINER')) {
+  if (isExact(t,'TERMINER')) {
     if (!S.compose.body.trim()) {
       speak("Je n'ai rien reçu. Parlez après le bip.", () => beep());
       return;
@@ -518,8 +536,8 @@ function hBody(t) {
     speak('Message terminé. Je vous relis le mail.', () => setTimeout(goComposeConfirm, 500));
     return;
   }
-  /* ANNULER = tout abandonner, mail et envoi */
-  if (is(t,'ANNULER') || is(t,'RETOUR') || is(t,'QUITTER')) {
+  /* ANNULER = tout abandonner, mail et envoi — mot seul exigé */
+  if (isExact(t,'ANNULER') || isExact(t,'RETOUR') || isExact(t,'QUITTER')) {
     S.compose = null;
     speak('Mail annulé. Rien ne sera envoyé.');
     return setTimeout(goMenu, 1500);
@@ -602,6 +620,7 @@ function boot() {
   if (started) return;
   started = true;
   _vx = speechSynthesis.getVoices();
+  initAudio(); /* AudioContext créé dans le geste — bip fiable sur iPhone */
   id('circle').classList.add('pulse');
 
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
