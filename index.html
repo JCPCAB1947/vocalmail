@@ -27,7 +27,7 @@
 
 <script>
 /* ================================================================
-   VOCALMAIL v9.8 — Interface 100 % vocale
+   VOCALMAIL v9.9 — Interface 100 % vocale
    Écran noir + cercle blanc. Toucher l'écran pour démarrer.
    Connexion au Worker Cloudflare — clé permanente, zéro authentification.
    ================================================================ */
@@ -64,9 +64,12 @@ function speak(txt, then) {
   if (!_spk) _flush();
 }
 
+let _ttsEnd = 0;
+
 function _flush() {
   if (!_q.length) {
     _spk = false; S.talking = false;
+    _ttsEnd = Date.now();
     if (S.micOn) setTimeout(startRec, 900); /* délai anti-feedback */
     return;
   }
@@ -268,11 +271,12 @@ const DISPATCH = {
 
 function onUtterance(t) {
   console.log('⟫ ' + t);
-  /* ANTI-ÉCHO : si l'énoncé est un fragment de la dernière phrase
-     prononcée par la voix de synthèse, c'est le micro qui s'entend
-     lui-même — on ignore. */
+  /* ANTI-ÉCHO : dans la fenêtre de 1,2 s après la fin de la voix,
+     un énoncé qui est un fragment de la phrase prononcée est l'écho
+     du micro — on l'ignore. Au-delà, c'est l'utilisateur qui répond
+     (même avec les mots de la question). */
   const nt = N(t);
-  if (nt.length > 5 && N(_lastSpoken).includes(nt)) return;
+  if (nt.length > 5 && Date.now() - _ttsEnd < 1200 && N(_lastSpoken).includes(nt)) return;
   /* Pendant TTS : ignorer sauf interruptions en lecture */
   if (S.talking) {
     if (S.screen === 'READING_EMAIL') {
