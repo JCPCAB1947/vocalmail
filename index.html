@@ -27,7 +27,7 @@
 
 <script>
 /* ================================================================
-   VOCALMAIL v9.16 — Interface 100 % vocale
+   VOCALMAIL v10.0 — Interface 100 % vocale
    Écran noir + cercle blanc. Toucher l'écran pour démarrer.
    Connexion au Worker Cloudflare — clé permanente, zéro authentification.
    ================================================================ */
@@ -181,7 +181,8 @@ const I = {
   ANCIEN:   ['le plus ancien','plus ancien','ancien','les anciens d abord','vieux'],
   RECENT:   ['le plus recent','plus recent','recent','dernier','le dernier','nouveau','le plus nouveau'],
   ANCIENS:  ['anciens','les anciens','deja lus','vieux','anciens mails','precedents'],
-  RETOUR:   ['retour','revenir','menu','menu principal','sortir'],
+  RETOUR:   ['retour','revenir','sortir'],
+  AIDE:     ['aide','menu','aide moi','que puis je dire','les commandes','quelles possibilites','help'],
   REPONDRE: ['repondre','reponse','reponds','repondre a ce mail'],
   SES_MAILS:  ['ses mails','les mails de','lire ses mails','les siens'],
   LUI_ECRIRE: ['lui ecrire','ecrire a','envoyer a','lui envoyer','contacter'],
@@ -268,9 +269,65 @@ function dedupSubject(subject, body) {
   return body;
 }
 
+/* Date du mail en français parlé : "le 12 juillet à 9 heures 15" */
+function dateFR(d) {
+  try {
+    const dt = new Date(d);
+    if (isNaN(dt)) return '';
+    const mois = ['janvier','février','mars','avril','mai','juin','juillet',
+                  'août','septembre','octobre','novembre','décembre'];
+    const j = dt.getDate(), m = mois[dt.getMonth()];
+    const h = dt.getHours(), mn = dt.getMinutes();
+    return `le ${j === 1 ? 'premier' : j} ${m} à ${h} heure${h > 1 ? 's' : ''}${mn ? ' ' + mn : ''}`;
+  } catch(e) { return ''; }
+}
+
 function spellAddr(e) {
   if (!e) return 'adresse inconnue';
   return [...e].map(c => ({ '@': 'arobase', '.': 'point', '-': 'tiret', '_': 'tiret bas' }[c] || c)).join(' ');
+}
+
+/* Parler une liste de phrases avec une respiration entre chaque */
+function speakSeq(parts, done) {
+  let i = 0;
+  const next = () => {
+    if (!S.helping) return;              /* aide annulée par 2 taps */
+    if (i >= parts.length) { if (done) done(); return; }
+    const txt = parts[i++];
+    speak(txt, () => setTimeout(next, 700)); /* respiration */
+  };
+  next();
+}
+
+/* Reposer la question du contexte courant */
+function reask(screen) {
+  if (screen === 'EMAIL_ACTIONS') { S.screen = 'EMAIL_ACTIONS'; speak('Suivant, précédent, répondre, ou anciens messages ?'); return; }
+  if (screen === 'ORDER_CHOICE')  { S.screen = 'ORDER_CHOICE';  speak('Le plus ancien ou le plus récent ?'); return; }
+  goMenu();
+}
+
+/* AIDE : énoncer toutes les possibilités, posément */
+function goHelp() {
+  S.helpReturn = S.screen === 'READING_EMAIL' ? 'EMAIL_ACTIONS' : S.screen;
+  S.helping = true;
+  stopTTS();
+  speakSeq([
+    'Voici ce que tu peux dire.',
+    'SUIVANT, pour le message suivant.',
+    'PRÉCÉDENT, pour revenir en arrière.',
+    'RELIRE, pour réécouter le message.',
+    'RÉPONDRE, pour répondre au message.',
+    'ANCIENS MESSAGES, pour les messages déjà lus.',
+    'ÉCRIRE, pour envoyer un nouveau message.',
+    'CHERCHER, pour retrouver un message.',
+    'QUITTER, pour fermer.',
+    'Pendant la lecture : un tap pour faire une pause. Deux taps pour passer au suivant.',
+    'Glisse vers le bas pour arrêter la lecture. Glisse vers le haut pour revenir à l’accueil.',
+    'Pendant la dictée : deux taps pour terminer le message.',
+  ], () => {
+    S.helping = false;
+    reask(S.helpReturn);
+  });
 }
 
 /* ── Dispatcher ────────────────────────────────────────────────── */
@@ -304,6 +361,7 @@ function onUtterance(t) {
     return; /* micro fermé pendant la parole : rien n'arrive ici */
   }
   if (is(t, 'QUITTER') && S.screen !== 'COMPOSE_BODY') return goGoodbye();
+  if (is(t, 'AIDE') && S.screen !== 'COMPOSE_BODY') return goHelp();
   const h = DISPATCH[S.screen];
   if (h) h(t);
 }
@@ -341,26 +399,32 @@ function hMenu(t) {
 
 function goGoodbye() {
   S.screen = 'IDLE'; S.micOn = false; stopRec(); stopTTS();
-  speak('Au revoir ' + USER_NAME + '. À bientôt.');
+  speak('Au revoir ' + (S.userName || '') + '. À bientôt.', () => {
+    try { window.close(); } catch(e) {}
+    try { window.location.href = 'about:blank'; } catch(e) {}
+  });
 }
 
 /* ── Lecture des mails ─────────────────────────────────────────── */
 
 async function goLoadEmails(older) {
   S.screen = 'LOADING';
-  speak('Je cherche vos mails.');
+  speak(older ? 'Je cherche tes anciens messages.' : 'Je cherche tes messages.');
   try {
     const q = older ? '' : 'is:unread';
     const data = await api('/list?max=20&q=' + encodeURIComponent(q));
     S.emails = data.emails || []; S.idx = 0; S.step = 1;
     if (!S.emails.length) {
-      speak('Aucun nouveau mail. Dites ANCIENS pour les mails déjà lus, ÉCRIRE, ou MENU.');
-      S.screen = 'EMAIL_LIST'; return;
+      speak(older ? 'Aucun ancien message.' : 'Aucun nouveau message. Dis ANCIENS MESSAGES, ÉCRIRE, ou CHERCHER.');
+      S.screen = 'MAIN_MENU'; return;
     }
-    if (S.emails.length === 1) { S.idx = 0; S.step = 1; return goReadEmail(0); }
-    goOrderChoice();
+    /* Même déroulement que les non-lus : annonce du dernier reçu, lecture directe */
+    S.introDone = false;
+    const m0 = S.emails[0];
+    speak(`${older ? 'Anciens messages. ' : ''}Le dernier, reçu ${dateFR(m0.date)}, envoyé par ${m0.from_name}, avec comme objet : ${m0.subject}.`,
+          () => goReadEmail(0));
   } catch(e) {
-    speak("Je n'ai pas pu charger vos mails. Dites RÉESSAYER ou MENU.");
+    speak('Je n’ai pas pu charger tes messages. Dis RÉESSAYER ou glisse vers le bas.');
     S.screen = 'RETRY_LOAD';
   }
 }
@@ -403,17 +467,21 @@ function hList(t) {
 async function goReadEmail(idx) {
   S.idx = idx; S.screen = 'LOADING';
   const meta = S.emails[idx];
-  speak(`Je lis le mail de ${meta.from_name}.`);
+  if (!S.introDone) {
+    S.introDone = true; /* l’intro du boot vient d’annoncer ce message */
+  } else {
+    speak(`Message reçu ${dateFR(meta.date)}, envoyé par ${meta.from_name}, avec comme objet : ${meta.subject}.`);
+  }
   try {
     const m = await api('/read?id=' + encodeURIComponent(meta.id));
     S.mail = m;
     S.screen = 'READING_EMAIL';
     speak(
-      `Objet : ${m.subject}. Message : ${dedupSubject(m.subject, cleanTxt(m.body))}`,
+      `Message : ${dedupSubject(m.subject, cleanTxt(m.body))}`,
       () => {
         if (S.screen === 'READING_EMAIL') {
           S.screen = 'EMAIL_ACTIONS';
-          speak('Fin du mail. Relire, précédent, suivant, ou répondre ?');
+          speak('Suivant, précédent, répondre, ou anciens messages ?');
         }
       }
     );
@@ -439,6 +507,7 @@ function hActions(t) {
   S.confusion = 0;
   if (is(t,'RELIRE'))    return goReadEmail(S.idx);
   if (is(t,'REPONDRE'))  return goReply();
+  if (is(t,'ANCIENS'))   return goLoadEmails(true);
   if (is(t,'PRECEDENT')) return goPrevEmail();
   if (is(t,'SUITE'))     return goNextEmail();
   if (is(t,'RETOUR') || is(t,'STOP')) return goMenu();
@@ -456,7 +525,7 @@ function goNextEmail() {
 function goPrevEmail() {
   const ni = S.idx - S.step;
   if (ni >= 0 && ni < S.emails.length) return goReadEmail(ni);
-  speak("Vous êtes au premier mail. Relire, précédent, suivant, ou répondre ?");
+  speak("Tu es au message le plus récent. Suivant, répondre, ou anciens messages ?");
   S.screen = 'EMAIL_ACTIONS';
 }
 
@@ -482,7 +551,7 @@ function goReply() {
     subject: 'Re : ' + m.subject.replace(/^Re\s*:\s*/i, ''),
     body: '', replyId: m.id,
   };
-  speak(`Réponse à ${m.from_name}. Dictez votre message. Dites TERMINÉ pour finir.`);
+  speak(`Réponse à ${m.from_name}. Dictez votre message, puis tapez deux fois sur l’écran pour terminer.`);
   S.screen = 'COMPOSE_BODY';
 }
 
@@ -572,18 +641,19 @@ function hSubject(t) {
 
 function goComposeBody() {
   S.screen = 'COMPOSE_BODY'; S.confusion = 0;
-  if (!S.talking) speak("Je vous écoute. Dictez votre message, puis dites TERMINÉ, seul, pour finir. ANNULER pour tout abandonner.");
+  if (!S.talking) speak("Dictez votre message. Tapez deux fois sur l’écran pour terminer, ou dites ANNULER pour abandonner.");
+}
+
+function finishDictation() {
+  if (!S.compose || !S.compose.body.trim()) {
+    speak("Je n’ai rien reçu. Dictez votre message, puis tapez deux fois pour terminer.");
+    return;
+  }
+  speak('Message terminé. Je te relis le mail.', () => setTimeout(goComposeConfirm, 500));
 }
 
 function hBody(t) {
-  if (isExact(t,'TERMINER')) {
-    if (!S.compose.body.trim()) {
-      speak("Je n'ai rien reçu. Dictez votre message, puis dites TERMINÉ.");
-      return;
-    }
-    speak('Message terminé. Je vous relis le mail.', () => setTimeout(goComposeConfirm, 500));
-    return;
-  }
+  if (isExact(t,'TERMINER')) return finishDictation();
   /* ANNULER = tout abandonner, mail et envoi — mot seul exigé */
   if (isExact(t,'ANNULER') || isExact(t,'RETOUR') || isExact(t,'QUITTER')) {
     S.compose = null;
@@ -681,23 +751,30 @@ function boot() {
     speak("Code d'accès manquant. Ouvrez le lien complet qui vous a été donné.");
     return;
   }
-  Promise.all([
-    api('/ping'),
-    api('/list?max=20&q=' + encodeURIComponent('is:unread')),
-  ]).then(([p, l]) => {
-    const name = p.account === 'philippe' ? 'Philippe' : 'Jean-Claude';
-    S.emails = l.emails || [];
-    const n = S.emails.length;
-    const compte = n === 0 ? "Vous n'avez aucun mail non lu."
-                 : n === 1 ? 'Vous avez un mail non lu.'
-                 : `Vous avez ${n} mails non lus.`;
-    speak(
-      `Bonjour ${name}. ${compte} Voulez-vous lire, envoyer, ou rechercher un mail ?`,
-      () => { S.screen = 'MAIN_MENU'; }
-    );
-  }).catch(() => {
-    speak("Code d'accès refusé ou connexion impossible. Vérifiez le lien.");
-  });
+  beep();
+  setTimeout(() => {
+    Promise.all([
+      api('/ping'),
+      api('/list?max=20&q=' + encodeURIComponent('is:unread')),
+    ]).then(([p, l]) => {
+      S.userName = p.account === 'philippe' ? 'Philippe' : 'Jean-Claude';
+      S.emails = l.emails || [];
+      const n = S.emails.length;
+      if (n === 0) {
+        speak(`Bonjour ${S.userName}. Tu n’as aucun message non lu. Dis ANCIENS MESSAGES, ÉCRIRE, ou CHERCHER.`,
+              () => { S.screen = 'MAIN_MENU'; });
+        return;
+      }
+      /* Lecture directe : le plus récent d’abord */
+      S.idx = 0; S.step = 1; S.introDone = false;
+      const m0 = S.emails[0];
+      const intro = `Bonjour ${S.userName}. Tu as ${n === 1 ? 'un message non lu' : n + ' messages non lus'}. ` +
+        `Le dernier, reçu ${dateFR(m0.date)}, envoyé par ${m0.from_name}, avec comme objet : ${m0.subject}.`;
+      speak(intro, () => goReadEmail(0));
+    }).catch(() => {
+      speak("Code d'accès refusé ou connexion impossible. Vérifiez le lien.");
+    });
+  }, 1000); /* bip puis UNE seconde */
 }
 
 /* Gestes :
@@ -716,6 +793,20 @@ function doTap() {
   _tapTimer = setTimeout(() => {
     const n = _tapCount;
     _tapCount = 0;
+    /* Pendant l'AIDE : 2 taps = sortir de l'aide */
+    if (S.helping) {
+      if (n >= 2) {
+        S.helping = false;
+        stopTTS();
+        reask(S.helpReturn);
+      }
+      return;
+    }
+    /* Pendant la DICTÉE : 2 taps = message terminé */
+    if (S.screen === 'COMPOSE_BODY') {
+      if (n >= 2) finishDictation();
+      return;
+    }
     if (S.screen !== 'READING_EMAIL') return;
     if (n >= 2) {           /* DOUBLE TAP → mail suivant */
       stopTTS();
@@ -723,7 +814,7 @@ function doTap() {
     }
     /* TAP SIMPLE → pause + question */
     stopTTS(); S.screen = 'EMAIL_ACTIONS';
-    speak('Relire, précédent, suivant, ou répondre ?');
+    speak('Suivant, précédent, répondre, ou anciens messages ?');
   }, 380);
 }
 
@@ -741,7 +832,8 @@ document.body.addEventListener('touchend', e => {
   if (!started) return boot();
 
   if (ay > ax) {
-    if (dy < 0) goHome();          /* BALAYAGE HAUT → accueil */
+    if (dy < 0) goHome();          /* BALAYAGE HAUT → accueil complet */
+    else { stopTTS(); goMenu(); }  /* BALAYAGE BAS → stop, question principale */
   } else if (S.emails.length) {
     stopTTS();
     if (dx > 0) goNextEmail();     /* DROITE → suivant */
