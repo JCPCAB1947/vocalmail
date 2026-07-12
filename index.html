@@ -27,7 +27,7 @@
 
 <script>
 /* ================================================================
-   VOCALMAIL v10.0 — Interface 100 % vocale
+   VOCALMAIL v10.1 — Interface 100 % vocale
    Écran noir + cercle blanc. Toucher l'écran pour démarrer.
    Connexion au Worker Cloudflare — clé permanente, zéro authentification.
    ================================================================ */
@@ -78,9 +78,9 @@ function _flush() {
   const { txt, then } = _q.shift();
   const u = new SpeechSynthesisUtterance(txt);
   u.lang = 'fr-FR'; u.rate = 1.0; u.pitch = 1.0; u.volume = 1;
-  const fv = _vx.find(v => v.lang.startsWith('fr') && v.localService)
-           || _vx.find(v => v.lang.startsWith('fr'));
-  if (fv) u.voice = fv;
+  /* Aucun choix de voix dans le code : Safari utilise la voix par défaut
+     de l'appareil (Réglages > Accessibilité > Contenu énoncé > Voix).
+     Aurélie sur l'iPad de Philippe, au choix de chacun ailleurs. */
   u.onend  = () => { _spk = false; S.talking = false; if (then) then(); _flush(); };
   u.onerror = () => { _spk = false; S.talking = false; _flush(); };
   /* La PREMIÈRE phrase doit partir immédiatement, dans le geste du
