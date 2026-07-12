@@ -83,9 +83,16 @@ function _flush() {
   if (fv) u.voice = fv;
   u.onend  = () => { _spk = false; S.talking = false; if (then) then(); _flush(); };
   u.onerror = () => { _spk = false; S.talking = false; _flush(); };
-  /* 300 ms pour que le micro soit VRAIMENT fermé avant de parler :
-     sinon iOS baisse le volume de la voix (ducking) pour toute la phrase */
-  setTimeout(() => speechSynthesis.speak(u), 300);
+  /* La PREMIÈRE phrase doit partir immédiatement, dans le geste du
+     toucher (exigence iOS, sinon la voix est bloquée). Les suivantes
+     attendent 300 ms que le micro soit vraiment fermé, pour éviter
+     la mise en sourdine (ducking). */
+  if (!window._ttsUnlocked) {
+    window._ttsUnlocked = true;
+    speechSynthesis.speak(u);
+  } else {
+    setTimeout(() => speechSynthesis.speak(u), 300);
+  }
 }
 
 function stopTTS() {
