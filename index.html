@@ -27,7 +27,7 @@
 
 <script>
 /* ================================================================
-   VOCALMAIL v9.12 — Interface 100 % vocale
+   VOCALMAIL v9.13 — Interface 100 % vocale
    Écran noir + cercle blanc. Toucher l'écran pour démarrer.
    Connexion au Worker Cloudflare — clé permanente, zéro authentification.
    ================================================================ */
@@ -77,13 +77,15 @@ function _flush() {
   stopRec(); /* micro coupé pendant la parole — les taps commandent la lecture */
   const { txt, then } = _q.shift();
   const u = new SpeechSynthesisUtterance(txt);
-  u.lang = 'fr-FR'; u.rate = 1.0; u.pitch = 1.0;
+  u.lang = 'fr-FR'; u.rate = 1.0; u.pitch = 1.0; u.volume = 1;
   const fv = _vx.find(v => v.lang.startsWith('fr') && v.localService)
            || _vx.find(v => v.lang.startsWith('fr'));
   if (fv) u.voice = fv;
   u.onend  = () => { _spk = false; S.talking = false; if (then) then(); _flush(); };
   u.onerror = () => { _spk = false; S.talking = false; _flush(); };
-  speechSynthesis.speak(u);
+  /* 300 ms pour que le micro soit VRAIMENT fermé avant de parler :
+     sinon iOS baisse le volume de la voix (ducking) pour toute la phrase */
+  setTimeout(() => speechSynthesis.speak(u), 300);
 }
 
 function stopTTS() {
@@ -282,12 +284,7 @@ function onUtterance(t) {
   if (nt.length > 5 && Date.now() - _ttsEnd < 1200 && N(_lastSpoken).includes(nt)) return;
   /* Pendant TTS : ignorer sauf interruptions en lecture */
   if (S.talking) {
-    if (S.screen === 'READING_EMAIL') {
-      if (isExact(t,'STOP') || isExact(t,'RETOUR')) { stopTTS(); return goMenu(); }
-      if (isExact(t,'SUITE'))  { stopTTS(); return goNextEmail(); }
-      if (isExact(t,'RELIRE')) { stopTTS(); return goReadEmail(S.idx); }
-    }
-    return;
+    return; /* micro fermé pendant la parole : rien n'arrive ici */
   }
   if (is(t, 'QUITTER') && S.screen !== 'COMPOSE_BODY') return goGoodbye();
   const h = DISPATCH[S.screen];
