@@ -141,7 +141,10 @@ function initRec() {
     if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
       if (!S.micWarned) {
         S.micWarned = true;
-        speak('Le micro est bloqué. Autorise le micro pour Safari dans les réglages de la tablette, puis recharge la page.');
+        const quoi = e.error === 'service-not-allowed'
+          ? 'Le service de reconnaissance est refusé. Vérifie que le mode ordinateur de Safari est désactivé, ferme tous les onglets, et rouvre la page.'
+          : 'Le micro est refusé. Autorise le micro pour ce site, ferme tous les onglets, et rouvre la page.';
+        speak(quoi);
       }
       return;
     }
