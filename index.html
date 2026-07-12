@@ -27,7 +27,7 @@
 
 <script>
 /* ================================================================
-   VOCALMAIL v9.9 — Interface 100 % vocale
+   VOCALMAIL v9.12 — Interface 100 % vocale
    Écran noir + cercle blanc. Toucher l'écran pour démarrer.
    Connexion au Worker Cloudflare — clé permanente, zéro authentification.
    ================================================================ */
@@ -168,6 +168,7 @@ const I = {
   NON:      ['non','annule','annuler','pas maintenant','stop d envoi','surtout pas','cancel','laisse tomber'],
   SUITE:    ['la suite','continue','suivant','prochain','passe','apres','le suivant'],
   RELIRE:   ['relire','relis','repete','repeter','encore une fois','redis','recommence la lecture'],
+  PRECEDENT:['precedent','le precedent','precedente','en arriere','reviens','avant','celui d avant'],
   ANCIEN:   ['le plus ancien','plus ancien','ancien','les anciens d abord','vieux'],
   RECENT:   ['le plus recent','plus recent','recent','dernier','le dernier','nouveau','le plus nouveau'],
   ANCIENS:  ['anciens','les anciens','deja lus','vieux','anciens mails','precedents'],
@@ -212,7 +213,7 @@ const ord = n => ORD[n-1] || String(n);
 function cleanTxt(txt) {
   if (!txt) return '';
   /* Arrêt à la formule de politesse : la suite n'est que signature */
-  const politesse = /((?:bien |très |tres )?cordialement|amicalement|bien à (?:vous|toi)|sincères salutations|sinceres salutations|salutations (?:distinguées|distinguees|respectueuses)|respectueusement|amitiés|amities|bises|bisous)/i;
+  const politesse = /((?:bien |très |tres )?cordialement|amicalement|bien à (?:vous|toi)|sincères salutations|sinceres salutations|salutations (?:distinguées|distinguees|respectueuses)|respectueusement|amitiés|amities|(?:grosses? )?bises?|(?:gros )?bisous?|je (?:t'|vous )embrasse)/i;
   const pm = txt.match(politesse);
   if (pm) txt = txt.slice(0, pm.index + pm[0].length);
   txt = txt.replace(/<[^>]+>/g, ' ');
@@ -220,6 +221,8 @@ function cleanTxt(txt) {
   txt = txt.replace(/www\.\S+/g, '');
   txt = txt.replace(/\S+@\S+\.\S+/g, '');
   const ab = [
+    [/\bJCP\b/g, 'Ji Cé Pé'], [/\bJ\.?-?C\.?P\.?\b/g, 'Ji Cé Pé'],
+    [/\bJC\b/g, 'Ji Cé'], [/\bJ\.-?C\.(?=\s|,|$)/g, 'Ji Cé'],
     [/\bM\. /g, 'Monsieur '], [/\bMme\b/g, 'Madame'], [/\bDr\b/g, 'Docteur'],
     [/\bsvp\b/gi, "s'il vous plaît"], [/\bcdt\b/gi, 'cordialement'],
     [/\brdv\b/gi, 'rendez-vous'],
@@ -394,7 +397,7 @@ async function goReadEmail(idx) {
       () => {
         if (S.screen === 'READING_EMAIL') {
           S.screen = 'EMAIL_ACTIONS';
-          speak('Fin du mail. Relire, suivant, ou répondre ?');
+          speak('Fin du mail. Relire, précédent, suivant, ou répondre ?');
         }
       }
     );
@@ -410,15 +413,17 @@ async function goReadEmail(idx) {
 
 function hReading(t) {
   if (is(t,'STOP') || is(t,'RETOUR')) { stopTTS(); return goMenu(); }
-  if (is(t,'SUITE'))  { stopTTS(); return goNextEmail(); }
-  if (is(t,'RELIRE')) { stopTTS(); return goReadEmail(S.idx); }
+  if (is(t,'SUITE'))     { stopTTS(); return goNextEmail(); }
+  if (is(t,'PRECEDENT')) { stopTTS(); return goPrevEmail(); }
+  if (is(t,'RELIRE'))    { stopTTS(); return goReadEmail(S.idx); }
 }
 
 function hActions(t) {
   S.confusion = 0;
-  if (is(t,'RELIRE'))   return goReadEmail(S.idx);
-  if (is(t,'REPONDRE')) return goReply();
-  if (is(t,'SUITE'))    return goNextEmail();
+  if (is(t,'RELIRE'))    return goReadEmail(S.idx);
+  if (is(t,'REPONDRE'))  return goReply();
+  if (is(t,'PRECEDENT')) return goPrevEmail();
+  if (is(t,'SUITE'))     return goNextEmail();
   if (is(t,'RETOUR') || is(t,'STOP')) return goMenu();
   if (is(t,'ECRIRE'))   return goComposeRecipient();
   confused(() => speak('Relire, suivant, ou répondre ?'));
@@ -429,6 +434,28 @@ function goNextEmail() {
   if (ni >= 0 && ni < S.emails.length) return goReadEmail(ni);
   speak("C'était le dernier mail. Voulez-vous lire, envoyer, ou rechercher un mail ?");
   S.screen = 'MAIN_MENU';
+}
+
+function goPrevEmail() {
+  const ni = S.idx - S.step;
+  if (ni >= 0 && ni < S.emails.length) return goReadEmail(ni);
+  speak("Vous êtes au premier mail. Relire, précédent, suivant, ou répondre ?");
+  S.screen = 'EMAIL_ACTIONS';
+}
+
+/* Retour complet au début : recomptage + accueil */
+async function goHome() {
+  stopTTS(); S.screen = 'LOADING'; S.confusion = 0;
+  try {
+    const l = await api('/list?max=20&q=' + encodeURIComponent('is:unread'));
+    S.emails = l.emails || [];
+    const n = S.emails.length;
+    const compte = n === 0 ? "Vous n'avez aucun mail non lu."
+                 : n === 1 ? 'Vous avez un mail non lu.'
+                 : `Vous avez ${n} mails non lus.`;
+    speak(`${compte} Voulez-vous lire, envoyer, ou rechercher un mail ?`,
+          () => { S.screen = 'MAIN_MENU'; });
+  } catch(e) { goMenu(); }
 }
 
 function goReply() {
@@ -528,13 +555,13 @@ function hSubject(t) {
 
 function goComposeBody() {
   S.screen = 'COMPOSE_BODY'; S.confusion = 0;
-  if (!S.talking) speak("Je vous écoute. Un bip confirme chaque phrase reçue. Dites TERMINÉ pour finir, ou ANNULER pour tout abandonner.");
+  if (!S.talking) speak("Je vous écoute. Dictez votre message, puis dites TERMINÉ, seul, pour finir. ANNULER pour tout abandonner.");
 }
 
 function hBody(t) {
   if (isExact(t,'TERMINER')) {
     if (!S.compose.body.trim()) {
-      speak("Je n'ai rien reçu. Parlez après le bip.", () => beep());
+      speak("Je n'ai rien reçu. Dictez votre message, puis dites TERMINÉ.");
       return;
     }
     speak('Message terminé. Je vous relis le mail.', () => setTimeout(goComposeConfirm, 500));
@@ -546,8 +573,10 @@ function hBody(t) {
     speak('Mail annulé. Rien ne sera envoyé.');
     return setTimeout(goMenu, 1500);
   }
+  /* SILENCE TOTAL pendant la dictée : aucun son, le micro n'est
+     jamais dérangé (le bip tuait la reconnaissance sur iPhone).
+     La confirmation, c'est la relecture complète après TERMINÉ. */
   S.compose.body += (S.compose.body ? ' ' : '') + t;
-  beep(); /* bip bref : reçu — le micro reste quasi disponible */
 }
 
 function goComposeConfirm() {
@@ -653,33 +682,56 @@ function boot() {
   });
 }
 
-/* Taps sur l'écran :
+/* Gestes :
    - premier toucher de la session : démarrage
-   - pendant la lecture d'un mail :
-       1 tap  → pause : "Relire, suivant, ou répondre ?"
-       2 taps rapides → mail suivant directement */
-let _tapTimer = null;
+   - pendant la lecture : 1 tap → pause+question · 2 taps → suivant
+   - partout : balayage droite → suivant · gauche → précédent
+               balayage haut → retour au début (accueil) */
+let _tapCount = 0, _tapTimer = null;
+let _tx = 0, _ty = 0, _swiped = false;
 
-function onTap() {
+function doTap() {
   if (!started) return boot();
-  if (S.screen !== 'READING_EMAIL') return;
 
-  if (_tapTimer) {
-    /* DOUBLE TAP → suivant */
-    clearTimeout(_tapTimer); _tapTimer = null;
-    stopTTS();
-    goNextEmail();
-  } else {
-    /* attendre un éventuel second tap */
-    _tapTimer = setTimeout(() => {
-      _tapTimer = null;
-      /* TAP SIMPLE → pause + question */
-      stopTTS(); S.screen = 'EMAIL_ACTIONS';
-      speak('Relire, suivant, ou répondre ?');
-    }, 350);
-  }
+  _tapCount++;
+  clearTimeout(_tapTimer);
+  _tapTimer = setTimeout(() => {
+    const n = _tapCount;
+    _tapCount = 0;
+    if (S.screen !== 'READING_EMAIL') return;
+    if (n >= 2) {           /* DOUBLE TAP → mail suivant */
+      stopTTS();
+      return goNextEmail();
+    }
+    /* TAP SIMPLE → pause + question */
+    stopTTS(); S.screen = 'EMAIL_ACTIONS';
+    speak('Relire, précédent, suivant, ou répondre ?');
+  }, 380);
 }
-document.body.addEventListener('click', onTap);
+
+document.body.addEventListener('touchstart', e => {
+  _tx = e.touches[0].clientX; _ty = e.touches[0].clientY; _swiped = false;
+}, { passive: true });
+
+document.body.addEventListener('touchend', e => {
+  const dx = e.changedTouches[0].clientX - _tx;
+  const dy = e.changedTouches[0].clientY - _ty;
+  const ax = Math.abs(dx), ay = Math.abs(dy);
+
+  if (ax < 40 && ay < 40) return; /* pas un balayage → le click gérera le tap */
+  _swiped = true;
+  if (!started) return boot();
+
+  if (ay > ax) {
+    if (dy < 0) goHome();          /* BALAYAGE HAUT → accueil */
+  } else if (S.emails.length) {
+    stopTTS();
+    if (dx > 0) goNextEmail();     /* DROITE → suivant */
+    else        goPrevEmail();     /* GAUCHE → précédent */
+  }
+}, { passive: true });
+
+document.body.addEventListener('click', () => { if (!_swiped) doTap(); });
 </script>
 </body>
 </html>
