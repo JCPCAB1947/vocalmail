@@ -20,23 +20,28 @@
 </head>
 <body>
 
-<!-- Bouton de démarrage — déclenche boot() via click (exigence iPad) -->
-<button id="startbtn" onclick="boot()" style="
+<!-- Bouton de démarrage — micro direct comme mictest.html -->
+<button id="startbtn" style="
   position:fixed; inset:0; width:100%; height:100%;
   background:#000; color:#fff; border:none; cursor:pointer;
   font-size:52px; font-weight:bold; font-family:-apple-system,sans-serif;
   z-index:999; display:flex; align-items:center; justify-content:center;
 ">TOUCHER L'ÉCRAN</button>
+<div id="transcript" style="
+  position:fixed; bottom:80px; left:0; right:0; text-align:center;
+  color:#7fdc7f; font-size:32px; font-family:-apple-system,sans-serif;
+  padding:20px; z-index:1000; pointer-events:none;
+"></div>
 
 <!-- Cercle micro blanc — unique élément visuel -->
-<div id="version" style="position:fixed;bottom:24px;left:0;right:0;text-align:center;color:#888;font-family:monospace;font-size:42px;font-weight:bold;">v10.8</div>
+<div id="version" style="position:fixed;bottom:24px;left:0;right:0;text-align:center;color:#888;font-family:monospace;font-size:42px;font-weight:bold;">v10.9</div>
 <div id="circle">
   <svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
 </div>
 
 <script>
 /* ================================================================
-   VOCALMAIL v10.8 — Interface 100 % vocale
+   VOCALMAIL v10.9 — Interface 100 % vocale
    Écran noir + cercle blanc. Toucher l'écran pour démarrer.
    Connexion au Worker Cloudflare — clé permanente, zéro authentification.
    ================================================================ */
@@ -798,7 +803,7 @@ function boot() {
     window._ttsUnlocked = true;
   } catch(e) {}
 
-  speak('Version dix huit.');
+  speak('Version dix neuf.');
   beep();
   /* Requête serveur lancée immédiatement, en parallèle du bip et de la seconde d'attente */
   const dataP = Promise.all([
@@ -893,6 +898,41 @@ document.body.addEventListener('touchend', e => {
 }, { passive: true });
 
 document.body.addEventListener('click', () => { if (!_swiped) doTap(); });
+
+/* v10.9 — micro direct comme mictest.html */
+document.getElementById('startbtn').addEventListener('click', () => {
+  const btn = document.getElementById('startbtn');
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) {
+    document.getElementById('transcript').textContent = 'ERREUR : API absente';
+    return;
+  }
+  const testRec = new SR();
+  testRec.lang = 'fr-FR';
+  testRec.continuous = true;
+  testRec.interimResults = true;
+
+  testRec.onstart = () => {
+    btn.style.display = 'none';
+    document.getElementById('transcript').textContent = 'MICRO OUVERT — PARLEZ';
+  };
+  testRec.onresult = e => {
+    let txt = '';
+    for (const r of e.results) txt += r[0].transcript + ' ';
+    document.getElementById('transcript').textContent = txt;
+    /* Dès que ça marche, on lance boot() normalement */
+    if (txt.trim().length > 0 && !started) {
+      testRec.stop();
+      boot();
+    }
+  };
+  testRec.onerror = e => {
+    document.getElementById('transcript').textContent = 'ERREUR : ' + e.error;
+  };
+  try { testRec.start(); } catch(ex) {
+    document.getElementById('transcript').textContent = 'EXCEPTION : ' + ex.message;
+  }
+});
 </script>
 </body>
 </html>
