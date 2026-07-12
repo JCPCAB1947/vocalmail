@@ -751,12 +751,25 @@ function boot() {
     speak("Code d'accès manquant. Ouvrez le lien complet qui vous a été donné.");
     return;
   }
+  /* Déverrouiller la synthèse vocale DANS le geste (règle iOS) :
+     une énonciation muette immédiate, sinon toute parole différée
+     serait bloquée → silence définitif */
+  try {
+    const u0 = new SpeechSynthesisUtterance(' ');
+    u0.volume = 0;
+    speechSynthesis.speak(u0);
+    window._ttsUnlocked = true;
+  } catch(e) {}
+
   beep();
-  setTimeout(() => {
-    Promise.all([
-      api('/ping'),
-      api('/list?max=20&q=' + encodeURIComponent('is:unread')),
-    ]).then(([p, l]) => {
+  /* Requête serveur lancée immédiatement, en parallèle du bip et de la seconde d'attente */
+  const dataP = Promise.all([
+    api('/ping'),
+    api('/list?max=20&q=' + encodeURIComponent('is:unread')),
+  ]);
+  const delayP = new Promise(r => setTimeout(r, 1000));
+  Promise.all([dataP, delayP]).then(([[p, l]]) => {
+    {
       S.userName = p.account === 'philippe' ? 'Philippe' : 'Jean-Claude';
       S.emails = l.emails || [];
       const n = S.emails.length;
@@ -771,10 +784,10 @@ function boot() {
       const intro = `Bonjour ${S.userName}. Tu as ${n === 1 ? 'un message non lu' : n + ' messages non lus'}. ` +
         `Le dernier, reçu ${dateFR(m0.date)}, envoyé par ${m0.from_name}, avec comme objet : ${m0.subject}.`;
       speak(intro, () => goReadEmail(0));
-    }).catch(() => {
-      speak("Code d'accès refusé ou connexion impossible. Vérifiez le lien.");
-    });
-  }, 1000); /* bip puis UNE seconde */
+    }
+  }).catch(() => {
+    speak("Code d'accès refusé ou connexion impossible. Vérifiez le lien.");
+  });
 }
 
 /* Gestes :
