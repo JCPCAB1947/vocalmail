@@ -29,14 +29,14 @@
 ">TOUCHER L'ÉCRAN</button>
 
 <!-- Cercle micro blanc — unique élément visuel -->
-<div id="version" style="position:fixed;bottom:24px;left:0;right:0;text-align:center;color:#888;font-family:monospace;font-size:42px;font-weight:bold;">v10.7</div>
+<div id="version" style="position:fixed;bottom:24px;left:0;right:0;text-align:center;color:#888;font-family:monospace;font-size:42px;font-weight:bold;">v10.8</div>
 <div id="circle">
   <svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
 </div>
 
 <script>
 /* ================================================================
-   VOCALMAIL v10.7 — Interface 100 % vocale
+   VOCALMAIL v10.8 — Interface 100 % vocale
    Écran noir + cercle blanc. Toucher l'écran pour démarrer.
    Connexion au Worker Cloudflare — clé permanente, zéro authentification.
    ================================================================ */
@@ -767,16 +767,21 @@ function boot() {
   started = true;
   const sb = document.getElementById('startbtn');
   if (sb) sb.style.display = 'none';
-  _vx = speechSynthesis.getVoices();
-  initAudio(); /* AudioContext créé dans le geste — bip fiable sur iPhone */
-  id('circle').classList.add('pulse');
 
+  /* iPadOS : déverrouiller le moteur de reconnaissance EN PREMIER,
+     avant tout autre code, start() + stop() immédiat = on obtient
+     l'autorisation sans laisser le micro ouvert pendant la TTS */
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (SR) {
     initRec(); S.micOn = true;
-    /* Déverrouiller la reconnaissance DANS le geste (exigence iPadOS :
-       le premier start() doit venir d'un toucher, sinon not-allowed) */
-    try { rec.start(); } catch(e) {}
+    try { rec.start(); setTimeout(() => { try { rec.stop(); } catch(e){} }, 80); } catch(e) {}
+  }
+
+  _vx = speechSynthesis.getVoices();
+  initAudio();
+  id('circle').classList.add('pulse');
+
+  if (SR) {
   }
 
   if (!PIN) {
@@ -793,7 +798,7 @@ function boot() {
     window._ttsUnlocked = true;
   } catch(e) {}
 
-  speak('Version dix sept.');
+  speak('Version dix huit.');
   beep();
   /* Requête serveur lancée immédiatement, en parallèle du bip et de la seconde d'attente */
   const dataP = Promise.all([
