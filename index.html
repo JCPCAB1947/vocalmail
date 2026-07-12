@@ -27,7 +27,7 @@
 
 <script>
 /* ================================================================
-   VOCALMAIL v9.13 — Interface 100 % vocale
+   VOCALMAIL v9.15 — Interface 100 % vocale
    Écran noir + cercle blanc. Toucher l'écran pour démarrer.
    Connexion au Worker Cloudflare — clé permanente, zéro authentification.
    ================================================================ */
@@ -186,10 +186,20 @@ const I = {
   SES_MAILS:  ['ses mails','les mails de','lire ses mails','les siens'],
   LUI_ECRIRE: ['lui ecrire','ecrire a','envoyer a','lui envoyer','contacter'],
   SON_ADRESSE:['son adresse','l adresse','adresse mail','epelle','son adresse mail'],
-  TERMINER: ['termine','fin du message','j ai fini','c est fini','fin','c est tout','voila','fini'],
+  TERMINER: ['termine','terminer','terminez','c est termine','j ai termine','message termine',
+             'fin du message','fin du mail','point final','j ai fini','c est fini','fin',
+             'c est tout','voila','fini','stop'],
   ANNULER:  ['annule','annuler','annulation','annule le mail','annule tout','abandonne','laisse tomber'],
   STOP:     ['stop','arrete','interromps','saute','assez','passe'],
 };
+
+/* Écho de question : un énoncé qui contient PLUSIEURS commandes
+   à la fois est forcément la voix qui s'entend elle-même. */
+function isPromptEcho(t, keys) {
+  let n = 0;
+  for (const k of keys) if (is(t, k)) n++;
+  return n >= 2;
+}
 
 /* Correspondance stricte : l'énoncé entier doit ÊTRE la commande.
    Utilisé pendant la lecture (micro ouvert) pour ignorer l'écho de la voix. */
@@ -318,6 +328,7 @@ function goMenu() {
 }
 
 function hMenu(t) {
+  if (isPromptEcho(t, ['LIRE','ECRIRE','CHERCHER'])) return; /* écho de la question */
   S.confusion = 0;
   if (is(t, 'LIRE'))   return goLoadEmails(false);
   if (is(t, 'ECRIRE')) return goComposeRecipient();
@@ -361,6 +372,7 @@ function goOrderChoice() {
 }
 
 function hOrder(t) {
+  if (isPromptEcho(t, ['ANCIEN','RECENT'])) return; /* écho de la question */
   if (is(t,'ANCIEN')) { S.idx = S.emails.length - 1; S.step = -1; return goReadEmail(S.idx); }
   if (is(t,'RECENT')) { S.idx = 0; S.step = 1; return goReadEmail(0); }
   if (is(t,'RETOUR')) return goMenu();
@@ -423,6 +435,7 @@ function hReading(t) {
 }
 
 function hActions(t) {
+  if (isPromptEcho(t, ['RELIRE','PRECEDENT','SUITE','REPONDRE'])) return; /* écho de la question */
   S.confusion = 0;
   if (is(t,'RELIRE'))    return goReadEmail(S.idx);
   if (is(t,'REPONDRE'))  return goReply();
