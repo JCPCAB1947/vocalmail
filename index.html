@@ -21,14 +21,14 @@
 <body>
 
 <!-- Cercle micro blanc — unique élément visuel -->
-<div id="version" style="position:fixed;bottom:8px;left:0;right:0;text-align:center;color:#444;font-family:monospace;font-size:14px;">v10.2</div>
+<div id="version" style="position:fixed;bottom:24px;left:0;right:0;text-align:center;color:#888;font-family:monospace;font-size:42px;font-weight:bold;">v10.3</div>
 <div id="circle">
   <svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
 </div>
 
 <script>
 /* ================================================================
-   VOCALMAIL v10.2 — Interface 100 % vocale
+   VOCALMAIL v10.3 — Interface 100 % vocale
    Écran noir + cercle blanc. Toucher l'écran pour démarrer.
    Connexion au Worker Cloudflare — clé permanente, zéro authentification.
    ================================================================ */
@@ -356,7 +356,10 @@ function onUtterance(t) {
      du micro — on l'ignore. Au-delà, c'est l'utilisateur qui répond
      (même avec les mots de la question). */
   const nt = N(t);
-  if (nt.length > 5 && Date.now() - _ttsEnd < 1200 && N(_lastSpoken).includes(nt)) return;
+  /* Les commandes exactes d'un seul tenant passent TOUJOURS,
+     même dans la fenêtre anti-écho (réponse rapide de l'utilisateur) */
+  const coreCmd = ['SUITE','PRECEDENT','RELIRE','REPONDRE','OUI','NON','STOP','RETOUR','AIDE','LIRE','ECRIRE','CHERCHER','ANCIENS','ANCIEN','RECENT','TERMINER','ANNULER','QUITTER'].some(k => isExact(t, k));
+  if (!coreCmd && nt.length > 5 && Date.now() - _ttsEnd < 1200 && N(_lastSpoken).includes(nt)) return;
   /* Pendant TTS : ignorer sauf interruptions en lecture */
   if (S.talking) {
     return; /* micro fermé pendant la parole : rien n'arrive ici */
@@ -471,7 +474,8 @@ async function goReadEmail(idx) {
   if (!S.introDone) {
     S.introDone = true; /* l’intro du boot vient d’annoncer ce message */
   } else {
-    speak(`Message reçu ${dateFR(meta.date)}, envoyé par ${meta.from_name}, avec comme objet : ${meta.subject}.`);
+    speak(`${S.navAnnounce || ''}Reçu ${dateFR(meta.date)}, envoyé par ${meta.from_name}, avec comme objet : ${meta.subject}.`);
+    S.navAnnounce = '';
   }
   try {
     const m = await api('/read?id=' + encodeURIComponent(meta.id));
@@ -518,14 +522,14 @@ function hActions(t) {
 
 function goNextEmail() {
   const ni = S.idx + S.step;
-  if (ni >= 0 && ni < S.emails.length) return goReadEmail(ni);
+  if (ni >= 0 && ni < S.emails.length) { S.navAnnounce = 'Message suivant. '; return goReadEmail(ni); }
   speak("C'était le dernier mail. Voulez-vous lire, envoyer, ou rechercher un mail ?");
   S.screen = 'MAIN_MENU';
 }
 
 function goPrevEmail() {
   const ni = S.idx - S.step;
-  if (ni >= 0 && ni < S.emails.length) return goReadEmail(ni);
+  if (ni >= 0 && ni < S.emails.length) { S.navAnnounce = 'Message précédent. '; return goReadEmail(ni); }
   speak("Tu es au message le plus récent. Suivant, répondre, ou anciens messages ?");
   S.screen = 'EMAIL_ACTIONS';
 }
