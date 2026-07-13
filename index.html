@@ -55,7 +55,8 @@ html,body { width:100%; height:100%; background:#000; color:#fff;
 
 <script>
 /* ═══ VERSION UNIQUE — ne changer QUE cette ligne ═══ */
-const VERSION = '12.2';
+const VERSION = '12.3';
+const DEBIT = 0.85;  /* vitesse de la voix : 1.0 = normal, 0.85 = posé, 0.7 = lent */
 
 /* ================================================================
    VOCALMAIL (version : voir constante VERSION)
@@ -112,7 +113,7 @@ function _flush() {
   stopRec(); /* iOS : micro FERME pendant la parole, sinon voix muette/etouffee */
   const {txt,then} = _q.shift();
   const u = new SpeechSynthesisUtterance(txt);
-  u.lang='fr-FR'; u.rate=1.0; u.volume=1;
+  u.lang='fr-FR'; u.rate=DEBIT; u.volume=1;
   u.onend  = () => { _spk=false; _ttsEnd = Date.now(); if(then) then(); _flush(); }; /* talking reste vrai tant que la file n'est pas vide */
   u.onerror = () => { _spk=false; if(then) then(); _flush(); };
   /* 250 ms pour que le micro soit vraiment ferme (anti-sourdine iOS),
@@ -477,6 +478,9 @@ document.getElementById('startbtn').addEventListener('click', ()=>{
   rec.onstart = ()=>{
     recOn=true;
     updateDebug();
+    /* Le micro rouvre a CHAQUE alternance voix/micro :
+       le demarrage ne doit s'executer qu'a la PREMIERE ouverture */
+    if (started) return;
     document.getElementById('startbtn').style.display='none';
     document.getElementById('circle').classList.add('pulse');
     started=true; S.micOn=true;
