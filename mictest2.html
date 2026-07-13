@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Test micro 2</title>
+<style>
+  body { background:#000; color:#fff; font-family:-apple-system,sans-serif;
+         display:flex; flex-direction:column; align-items:center; justify-content:center;
+         min-height:100vh; margin:0; text-align:center; }
+  #status { font-size:34px; font-weight:bold; padding:20px; }
+  #heard  { font-size:28px; color:#7fdc7f; padding:20px; min-height:80px; }
+  #err    { font-size:30px; color:#ff7070; padding:20px; font-weight:bold; }
+  #btn    { font-size:40px; padding:30px 60px; border-radius:20px; border:none;
+            background:#fff; color:#000; font-weight:bold; }
+</style>
+</head>
+<body>
+<div id="status">TEST MICRO 2 + WORKER</div>
+<button id="btn">TOUCHER ICI</button>
+<div id="heard"></div>
+<div id="err"></div>
+<script>
+const WORKER_URL = 'https://vocalmail-gmail.jc-penochetcab.workers.dev';
+const _urlPin = new URLSearchParams(location.search).get('pin');
+if (_urlPin) try { localStorage.setItem('vm_pin', _urlPin); } catch(e) {}
+const PIN = _urlPin || (function(){ try { return localStorage.getItem('vm_pin') || ''; } catch(e) { return ''; } })();
+
+const S = document.getElementById('status');
+const H = document.getElementById('heard');
+const E = document.getElementById('err');
+const B = document.getElementById('btn');
+
+/* Appel Worker au chargement — comme dans index.html */
+fetch(WORKER_URL + '/emails?max=1', {
+  headers: { 'X-Pin': PIN }
+}).then(r => r.json()).then(d => {
+  S.textContent = 'Worker OK — ' + (d.emails ? d.emails.length + ' mail(s)' : 'réponse reçue');
+}).catch(err => {
+  S.textContent = 'Worker erreur : ' + err.message;
+});
+
+B.addEventListener('click', () => {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { E.textContent = 'API SpeechRecognition ABSENTE'; return; }
+  const rec = new SR();
+  rec.lang = 'fr-FR';
+  rec.continuous = true;
+  rec.interimResults = true;
+
+  rec.onstart  = () => { S.textContent = 'MICRO OUVERT — PARLEZ'; S.style.color = '#7fdc7f'; };
+  rec.onresult = e => {
+    let txt = '';
+    for (const r of e.results) txt += r[0].transcript + ' ';
+    H.textContent = txt;
+  };
+  rec.onerror  = e => {
+    E.textContent = 'ERREUR : ' + e.error;
+    S.textContent = 'MICRO EN ÉCHEC'; S.style.color = '#ff7070';
+  };
+  rec.onend = () => { if (!E.textContent) S.textContent = 'MICRO FERMÉ'; };
+
+  try { rec.start(); } catch(ex) { E.textContent = 'EXCEPTION : ' + ex.message; }
+});
+</script>
+</body>
+</html>
