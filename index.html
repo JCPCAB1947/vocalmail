@@ -34,14 +34,14 @@
 "></div>
 
 <!-- Cercle micro blanc — unique élément visuel -->
-<div id="version" style="position:fixed;bottom:24px;left:0;right:0;text-align:center;color:#888;font-family:monospace;font-size:42px;font-weight:bold;">v10.11</div>
+<div id="version" style="position:fixed;bottom:24px;left:0;right:0;text-align:center;color:#888;font-family:monospace;font-size:42px;font-weight:bold;">v10.12</div>
 <div id="circle">
   <svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
 </div>
 
 <script>
 /* ================================================================
-   VOCALMAIL v10.11 — Interface 100 % vocale
+   VOCALMAIL v10.12 — Interface 100 % vocale
    Écran noir + cercle blanc. Toucher l'écran pour démarrer.
    Connexion au Worker Cloudflare — clé permanente, zéro authentification.
    ================================================================ */
@@ -793,7 +793,7 @@ function boot() {
     window._ttsUnlocked = true;
   } catch(e) {}
 
-  speak('Version onze.');
+  speak('Version douze.');
   beep();
   /* Requête serveur lancée immédiatement, en parallèle du bip et de la seconde d'attente */
   const dataP = Promise.all([
@@ -889,16 +889,35 @@ document.body.addEventListener('touchend', e => {
 
 document.body.addEventListener('click', () => { if (!_swiped) doTap(); });
 
-/* v10.11 — micro direct comme mictest.html */
+/* v10.12 — micro direct comme mictest.html */
 document.getElementById('startbtn').addEventListener('click', () => {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) { document.getElementById('transcript').textContent = 'ERREUR : API absente'; return; }
 
-  /* Exactement comme mictest3 — rec.start() directement dans le listener */
-  initRec(); S.micOn = true;
+  /* new SR() direct comme mictest3 — aucun appel intermédiaire */
+  rec = new SR();
+  rec.lang = 'fr-FR';
+  rec.continuous = true;
+  rec.interimResults = false;
+  rec.maxAlternatives = 3;
+  S.micOn = true;
+
   rec.onstart = () => {
+    recOn = true;
     document.getElementById('startbtn').style.display = 'none';
     boot(); /* micro ouvert — on lance la suite */
+  };
+  rec.onend = () => { recOn = false; };
+  rec.onerror = e => {
+    if (!S.micWarned) {
+      S.micWarned = true;
+      speak('Le service de reconnaissance est refusé.');
+    }
+  };
+  rec.onresult = e => {
+    if (S.talking) return;
+    const t = e.results[e.results.length - 1][0].transcript.trim();
+    if (t) onUtterance(t);
   };
 
   try { rec.start(); } catch(ex) {
