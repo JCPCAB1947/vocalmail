@@ -5,9 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>VocalMail</title>
 <style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { width:100%; height:100%; background:#000; color:#fff;
-             font-family:-apple-system,sans-serif; overflow:hidden; }
+* { box-sizing:border-box; margin:0; padding:0; }
+html,body { width:100%; height:100%; background:#000; color:#fff;
+            font-family:-apple-system,sans-serif; overflow:hidden; }
 
 #startbtn {
   position:fixed; inset:0; width:100%; height:100%;
@@ -18,10 +18,11 @@ html, body { width:100%; height:100%; background:#000; color:#fff;
 #circle {
   position:fixed; top:50%; left:50%; transform:translate(-50%,-60%);
   width:180px; height:180px; border-radius:50%;
-  background:#fff; display:none; align-items:center; justify-content:center;
+  background:#fff; align-items:center; justify-content:center;
+  display:none;
 }
-#circle svg { width:80px; height:80px; fill:#000; }
 #circle.pulse { display:flex; animation:pulse 1.5s infinite; }
+#circle svg { width:80px; height:80px; fill:#000; }
 @keyframes pulse {
   0%,100% { transform:translate(-50%,-60%) scale(1); opacity:1; }
   50%      { transform:translate(-50%,-60%) scale(1.08); opacity:.85; }
@@ -30,27 +31,25 @@ html, body { width:100%; height:100%; background:#000; color:#fff;
   position:fixed; bottom:24px; left:0; right:0;
   text-align:center; color:#555; font-family:monospace; font-size:14px;
 }
+#transcript {
+  position:fixed; bottom:50px; left:0; right:0; text-align:center;
+  color:#7fdc7f; font-size:26px; padding:10px;
+  pointer-events:none; z-index:100;
+}
 </style>
 </head>
 <body>
 
 <button id="startbtn">TOUCHER L'ÉCRAN</button>
-
 <div id="circle">
   <svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
 </div>
-
-<div id="version">v11.5</div>
-<div id="transcript" style="
-  position:fixed; bottom:60px; left:0; right:0; text-align:center;
-  color:#7fdc7f; font-size:28px; font-family:-apple-system,sans-serif;
-  padding:20px; z-index:1000; pointer-events:none;
-"></div>
+<div id="transcript"></div>
+<div id="version">v11.6</div>
 
 <script>
 /* ================================================================
-   VOCALMAIL v11.5 — Reconstruction depuis mictest3
-   Micro : new SR() direct dans le listener du bouton (recette iPad)
+   VOCALMAIL v11.6
    ================================================================ */
 
 const WORKER_URL = 'https://vocalmail-gmail.jc-penochetcab.workers.dev';
@@ -85,7 +84,7 @@ function _flush() {
   const u = new SpeechSynthesisUtterance(txt);
   u.lang='fr-FR'; u.rate=1.0; u.volume=1;
   u.onend  = () => { _spk=false; S.talking=false; if(then) then(); _flush(); };
-  u.onerror = () => { _spk=false; S.talking=false; _flush(); };
+  u.onerror = () => { _spk=false; S.talking=false; if(then) then(); _flush(); };
   speechSynthesis.speak(u);
 }
 
@@ -93,7 +92,7 @@ function stopTTS() {
   _q=[]; speechSynthesis.cancel(); _spk=false; S.talking=false;
 }
 
-/* ── Bip ────────────────────────────────────────────────────────── */
+/* ── Bip — un seul bip par commande finale ──────────────────────── */
 let _actx=null;
 function beep() {
   try {
@@ -110,8 +109,7 @@ let rec=null, recOn=false, started=false;
 const S = {
   screen:'IDLE', emails:[], idx:0, userName:'',
   compose:{to:'',toAddr:'',subject:'',body:''},
-  contacts:[], disambig:[], talking:false, micOn:false,
-  order:'date', searchQ:'', micWarned:false
+  talking:false, micOn:false, searchQ:'', micWarned:false
 };
 
 /* ── Helpers ────────────────────────────────────────────────────── */
@@ -131,10 +129,6 @@ function dedupSubject(s) {
   return s.replace(/^(re|fwd?|tr)\s*:\s*/gi,'').trim();
 }
 
-function spellAddr(a) {
-  return a.replace(/@/,' arobase ').replace(/\./g,' point ').replace(/_/g,' tiret ');
-}
-
 function cleanTxt(t) {
   return t.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
 }
@@ -145,33 +139,21 @@ function N(t){ return t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/
 function is(t, key) {
   const v = N(t);
   const map = {
-    'SUIVANT'  : ['suivant','prochain','après','apres','next','deux','2'],
-    'PRECEDENT': ['précédent','precedent','avant','retour','back','arrière','arriere'],
-    'LIRE'     : ['lire','lis','écouter','ecouter','ouvrir','ouvre','lire ce mail'],
-    'REPONDRE' : ['répondre','repondre','réponse','reponse','reply'],
-    'SUPPRIMER': ['supprimer','supprime','effacer','efface','corbeille','poubelle'],
-    'MENU'     : ['menu','accueil','retour au menu','home'],
-    'ECRIRE'   : ['écrire','ecrire','nouveau','composer','rédiger','rediger','nouveau mail'],
-    'CHERCHER' : ['chercher','cherche','rechercher','recherche','find'],
-    'ENVOYER'  : ['envoyer','envoie','send','oui envoyer','confirmer'],
-    'ANNULER'  : ['annuler','annule','cancel','non','abandonner'],
-    'OUI'      : ['oui','yes','ok','affirmatif','correct','exactement','absolument','vas-y','allez'],
-    'NON'      : ['non','no','pas','nope','négatif','negatif'],
-    'AIDE'     : ['aide','help','quoi','que puis','que peux','commandes'],
-    'LUI_ECRIRE':['lui écrire','lui ecrire','écrire à','ecrire a','envoyer un mail'],
-    'ANCIENS'  : ['anciens','anciens messages','plus ancien','lus','déjà lus','deja lus'],
+    'SUIVANT'  : ['suivant','prochain','next'],
+    'PRECEDENT': ['precedent','avant','retour','arriere'],
+    'LIRE'     : ['lire','lis','ecouter','ouvrir','ouvre'],
+    'REPONDRE' : ['repondre','reponse','reply'],
+    'MENU'     : ['menu','accueil','home'],
+    'ECRIRE'   : ['ecrire','nouveau','composer','rediger'],
+    'CHERCHER' : ['chercher','cherche','rechercher','recherche'],
+    'ENVOYER'  : ['envoyer','envoie','send','confirmer'],
+    'ANNULER'  : ['annuler','annule','cancel','abandonner'],
+    'OUI'      : ['oui','yes','ok','affirmatif','correct','vas-y'],
+    'NON'      : ['non','no','negatif'],
+    'AIDE'     : ['aide','help','commandes'],
+    'ANCIENS'  : ['anciens','deja lus','lus'],
   };
   return (map[key]||[key.toLowerCase()]).some(k => v.includes(k));
-}
-
-function extractNum(t) {
-  const words={'un':1,'une':1,'hein':1,'1':1,'premier':1,
-               'deux':2,'2':2,'deuxième':2,'deuxieme':2,
-               'trois':3,'3':3,'troisième':3,'troisieme':3,
-               'quatre':4,'4':4,'cinq':5,'5':5};
-  const v=N(t);
-  for (const [w,n] of Object.entries(words)) if (v.includes(w)) return n;
-  return null;
 }
 
 /* ── Lecture emails ─────────────────────────────────────────────── */
@@ -190,7 +172,7 @@ function goMenu() {
 }
 
 function goLoadEmails(q) {
-  S.screen='LOADING';
+  S.screen='LIST'; /* screen=LIST dès maintenant pour accepter commandes */
   speak('Chargement...', async () => {
     try {
       const r = await api('/list?max=20&q='+encodeURIComponent(q||'is:unread'));
@@ -198,7 +180,7 @@ function goLoadEmails(q) {
       S.idx=0;
       if (!S.emails.length) { speak('Aucun message.', goMenu); return; }
       speak(`${S.emails.length} message${S.emails.length>1?'s':''}. `+
-            `Le dernier, reçu le ${dateFR(S.emails[0].date)}.`, () => goList());
+            `Le dernier, reçu le ${dateFR(S.emails[0].date)}.`, goList);
     } catch(err) { speak('Erreur de chargement.', goMenu); }
   });
 }
@@ -213,7 +195,7 @@ function goList() {
 
 function goNextEmail() {
   if (S.idx < S.emails.length-1) { S.idx++; goList(); }
-  else speak('Dernier message atteint.', goList);
+  else speak('Dernier message.', goList);
 }
 
 function goPrevEmail() {
@@ -228,11 +210,14 @@ function goReadEmail() {
 }
 
 function goReply() {
-  S.compose = {to:S.emails[S.idx].from_name||'',
-               toAddr:S.emails[S.idx].from_addr||'',
-               subject:'Re: '+(S.emails[S.idx].subject||''),
-               body:''};
-  speak(`Réponse à ${S.compose.to}. Dictez votre message.`, () => { S.screen='COMPOSE_BODY'; });
+  S.compose = {
+    to: S.emails[S.idx].from_name||'',
+    toAddr: S.emails[S.idx].from_addr||'',
+    subject: 'Re: '+(S.emails[S.idx].subject||''),
+    body:''
+  };
+  S.screen='COMPOSE_BODY';
+  speak(`Réponse à ${S.compose.to}. Dictez votre message.`);
 }
 
 function goComposeRecipient() {
@@ -240,22 +225,13 @@ function goComposeRecipient() {
   speak('À qui voulez-vous écrire ?');
 }
 
-function goComposeSubject() {
-  S.screen='COMPOSE_SUBJ';
-  speak('Quel est le sujet du mail ?');
-}
-
-function goComposeBody() {
-  S.screen='COMPOSE_BODY';
-  speak('Dictez votre message.');
-}
-
 function goComposeConfirm() {
   S.screen='COMPOSE_CONFIRM';
-  speak(`Je vais envoyer à ${S.compose.to} : ${S.compose.subject}. ${S.compose.body}. Confirmer l'envoi ?`);
+  speak(`Je vais envoyer à ${S.compose.to} : ${S.compose.subject}. ${S.compose.body}. Confirmer ?`);
 }
 
 async function doSend() {
+  S.screen='IDLE';
   speak('Envoi en cours...', async () => {
     try {
       await api('/send','POST',{
@@ -264,7 +240,7 @@ async function doSend() {
         body: S.compose.body
       });
       speak('Mail envoyé.', goMenu);
-    } catch(e) { speak('Erreur d\'envoi.', goMenu); }
+    } catch(e) { speak("Erreur d'envoi.", goMenu); }
   });
 }
 
@@ -273,88 +249,87 @@ function goSearchQ() {
   speak('Que voulez-vous rechercher ?');
 }
 
-function goSearch() {
-  goLoadEmails(S.searchQ);
-}
-
-function goGoodbye() {
-  S.screen='IDLE'; S.micOn=false;
-  if(rec) try{rec.stop();}catch(e){}
-  speak('Au revoir. À bientôt.');
-}
-
-/* ── Interprétation commandes ───────────────────────────────────── */
+/* ── Interprétation commandes — uniquement résultats finals ─────── */
 function onUtterance(t) {
-  if (!t||S.talking) return;
-  beep();
-  const sc=S.screen;
+  if (!t) return;
+  /* Ne pas traiter si la TTS parle encore */
+  if (S.talking) return;
 
-  if (is(t,'MENU'))      { stopTTS(); goMenu(); return; }
-  if (is(t,'AIDE'))      { speak('Dites lire, écrire, rechercher, suivant, précédent, répondre, ou menu.'); return; }
+  document.getElementById('transcript').textContent = t;
+  beep(); /* un seul bip par commande finale */
+
+  const sc = S.screen;
+
+  if (is(t,'MENU')) { stopTTS(); goMenu(); return; }
+  if (is(t,'AIDE')) {
+    speak('Dites lire, écrire, rechercher, suivant, précédent, répondre, ou menu.');
+    return;
+  }
 
   if (sc==='MENU') {
-    if (is(t,'LIRE'))    { goLoadEmails('is:unread'); return; }
-    if (is(t,'ANCIENS')) { goLoadEmails('is:read');   return; }
-    if (is(t,'ECRIRE'))  { goComposeRecipient();      return; }
-    if (is(t,'CHERCHER')){ goSearchQ();               return; }
+    if (is(t,'LIRE'))     { goLoadEmails('is:unread'); return; }
+    if (is(t,'ANCIENS'))  { goLoadEmails('is:read');   return; }
+    if (is(t,'ECRIRE'))   { goComposeRecipient();      return; }
+    if (is(t,'CHERCHER')) { goSearchQ();               return; }
     speak('Dites lire, écrire, ou rechercher.');
     return;
   }
 
   if (sc==='LIST') {
-    if (is(t,'LIRE'))     { goReadEmail(); return; }
-    if (is(t,'SUIVANT'))  { goNextEmail(); return; }
-    if (is(t,'PRECEDENT')){ goPrevEmail(); return; }
-    if (is(t,'REPONDRE')) { goReply();     return; }
-    if (is(t,'ECRIRE'))   { goComposeRecipient(); return; }
-    speak('Dites lire, suivant, précédent, ou répondre.');
-    return;
+    if (is(t,'LIRE'))      { goReadEmail(); return; }
+    if (is(t,'SUIVANT'))   { goNextEmail(); return; }
+    if (is(t,'PRECEDENT')) { goPrevEmail(); return; }
+    if (is(t,'REPONDRE'))  { goReply();     return; }
+    if (is(t,'ECRIRE'))    { goComposeRecipient(); return; }
+    return; /* silence si commande inconnue en liste */
   }
 
   if (sc==='READING') {
-    if (is(t,'REPONDRE')) { goReply();    return; }
-    if (is(t,'SUIVANT'))  { goNextEmail();return; }
-    if (is(t,'PRECEDENT')){ goPrevEmail();return; }
-    speak('Dites répondre, suivant, précédent, ou menu.');
+    if (is(t,'REPONDRE'))  { goReply();     return; }
+    if (is(t,'SUIVANT'))   { goNextEmail(); return; }
+    if (is(t,'PRECEDENT')) { goPrevEmail(); return; }
     return;
   }
 
   if (sc==='COMPOSE_RECIP') {
     S.compose.to=t; S.compose.toAddr=t;
-    speak(`Destinataire : ${t}. Quel est le sujet ?`, goComposeSubject);
+    S.screen='COMPOSE_SUBJ';
+    speak(`Destinataire : ${t}. Quel est le sujet ?`);
     return;
   }
 
   if (sc==='COMPOSE_SUBJ') {
     S.compose.subject=t;
-    speak(`Sujet : ${t}. Dictez votre message.`, goComposeBody);
+    S.screen='COMPOSE_BODY';
+    speak(`Sujet : ${t}. Dictez votre message.`);
     return;
   }
 
   if (sc==='COMPOSE_BODY') {
     if (is(t,'ANNULER')) { speak('Mail annulé.', goMenu); return; }
     S.compose.body=t;
-    speak(`Message : ${t}.`, goComposeConfirm);
+    goComposeConfirm();
     return;
   }
 
   if (sc==='COMPOSE_CONFIRM') {
     if (is(t,'OUI')||is(t,'ENVOYER')) { doSend(); return; }
     if (is(t,'NON')||is(t,'ANNULER')) { speak('Mail annulé.', goMenu); return; }
-    speak('Confirmez-vous l\'envoi ? Dites oui ou non.');
+    speak('Dites oui ou non.');
     return;
   }
 
   if (sc==='SEARCH_Q') {
     S.searchQ=t;
-    speak(`Recherche : ${t}.`, goSearch);
+    speak(`Recherche : ${t}.`, () => goLoadEmails(t));
     return;
   }
 }
 
 /* ── Gestes ─────────────────────────────────────────────────────── */
-let _tx=0,_ty=0,_swiped=false;
+let _tx=0, _ty=0, _swiped=false;
 document.body.addEventListener('touchstart', e=>{
+  if (!started) return;
   _tx=e.touches[0].clientX; _ty=e.touches[0].clientY; _swiped=false;
 },{passive:true});
 
@@ -362,19 +337,18 @@ document.body.addEventListener('touchend', e=>{
   if (!started) return;
   const dx=e.changedTouches[0].clientX-_tx;
   const dy=e.changedTouches[0].clientY-_ty;
-  const ax=Math.abs(dx),ay=Math.abs(dy);
+  const ax=Math.abs(dx), ay=Math.abs(dy);
   if (ax<40&&ay<40) return;
   _swiped=true;
   stopTTS();
-  if (ay>ax) { if(dy<0) goMenu(); else goMenu(); }
+  if (ay>ax) { goMenu(); }
   else if (S.emails.length) {
     if (dx>0) goNextEmail(); else goPrevEmail();
   }
 },{passive:true});
 
 document.body.addEventListener('click', e=>{
-  if (!started||_swiped) return;
-  if (e.target.id==='startbtn') return; /* ignorer le bouton de démarrage */
+  if (!started||_swiped||e.target.id==='startbtn') return;
   _swiped=false;
   stopTTS();
   if (S.screen==='LIST') goReadEmail();
@@ -385,43 +359,37 @@ document.getElementById('startbtn').addEventListener('click', ()=>{
   const SR = window.SpeechRecognition||window.webkitSpeechRecognition;
   if (!SR) { alert('Reconnaissance vocale non supportée'); return; }
 
-  /* new SR() + handlers + start() directement dans le listener — recette iPad */
   rec = new SR();
-  rec.lang='fr-FR';
-  rec.continuous=true;
-  rec.interimResults=false;
-  rec.maxAlternatives=3;
+  rec.lang = 'fr-FR';
+  rec.continuous = true;
+  rec.interimResults = true;   /* true pour garder le micro actif */
+  rec.maxAlternatives = 1;
 
   rec.onstart = ()=>{
     recOn=true;
-    /* Micro ouvert — maintenant on peut lancer la suite */
     document.getElementById('startbtn').style.display='none';
     document.getElementById('circle').classList.add('pulse');
     started=true; S.micOn=true;
 
-    /* Déverrouiller TTS dans le geste — obligatoire iOS */
+    /* Déverrouiller TTS dans le geste */
     try {
-      const u0 = new SpeechSynthesisUtterance(' ');
+      const u0=new SpeechSynthesisUtterance(' ');
       u0.volume=0; speechSynthesis.speak(u0);
     } catch(e){}
 
-    /* TTS de bienvenue puis chargement mails */
-    if (!PIN) {
-      speak("Code d'accès manquant.");
-      return;
-    }
-    speak('Version onze cinq.', ()=>{
-      beep();
+    if (!PIN) { speak("Code d'accès manquant."); return; }
+
+    speak('Version onze six.', ()=>{
       api('/ping').then(p=>{
         S.userName=p.account_name||p.email||'';
         goLoadEmails('is:unread');
-      }).catch(()=>{ speak('Erreur de connexion.'); });
+      }).catch(()=>{ speak('Erreur de connexion.', goMenu); });
     });
   };
 
   rec.onend = ()=>{
     recOn=false;
-    /* Sur cet iPad, rec s'arrête parfois après silence — on relance si micro actif */
+    /* Relancer si micro encore actif */
     if (S.micOn && started) setTimeout(()=>{ try{rec.start();}catch(e){} }, 300);
   };
 
@@ -433,10 +401,11 @@ document.getElementById('startbtn').addEventListener('click', ()=>{
     }
   };
 
-  rec.interimResults = true;
+  /* Uniquement les résultats FINALS → un seul bip, pas de bips en rafale */
   rec.onresult = e=>{
-    const t=e.results[e.results.length-1][0].transcript.trim();
-    document.getElementById('transcript').textContent = t; /* affichage debug */
+    const result = e.results[e.results.length-1];
+    if (!result.isFinal) return; /* ignorer les intermédiaires */
+    const t = result[0].transcript.trim();
     if (t) onUtterance(t);
   };
 
