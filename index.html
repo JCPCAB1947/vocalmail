@@ -55,7 +55,7 @@ html,body { width:100%; height:100%; background:#000; color:#fff;
 
 <script>
 /* ═══ VERSION UNIQUE — ne changer QUE cette ligne ═══ */
-const VERSION = '12.1';
+const VERSION = '12.2';
 
 /* ================================================================
    VOCALMAIL (version : voir constante VERSION)
@@ -108,12 +108,13 @@ function _flush() {
     return;
   }
   _spk=true; S.talking=true;
+  updateDebug(); /* rafraichir le voyant DES que la voix demarre */
   stopRec(); /* iOS : micro FERME pendant la parole, sinon voix muette/etouffee */
   const {txt,then} = _q.shift();
   const u = new SpeechSynthesisUtterance(txt);
   u.lang='fr-FR'; u.rate=1.0; u.volume=1;
-  u.onend  = () => { _spk=false; S.talking=false; _ttsEnd = Date.now(); updateDebug(); if(then) then(); _flush(); };
-  u.onerror = () => { _spk=false; S.talking=false; updateDebug(); if(then) then(); _flush(); };
+  u.onend  = () => { _spk=false; _ttsEnd = Date.now(); if(then) then(); _flush(); }; /* talking reste vrai tant que la file n'est pas vide */
+  u.onerror = () => { _spk=false; if(then) then(); _flush(); };
   /* 250 ms pour que le micro soit vraiment ferme (anti-sourdine iOS),
      la PREMIERE phrase part immediatement (deverrouillage deja fait dans le geste) */
   if (!window._ttsWarm) { window._ttsWarm = true; speechSynthesis.speak(u); }
@@ -125,7 +126,7 @@ function stopRec() {
 }
 
 function startRec() {
-  if (rec && !recOn && !S.talking && S.micOn && started) {
+  if (rec && !recOn && !S.talking && !_spk && !_q.length && S.micOn && started) {
     try { rec.start(); } catch(e){}
   }
 }
@@ -144,7 +145,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function updateDebug() {
   const el = document.getElementById('debug');
-  if (el) el.textContent = 'v' + VERSION + ' | screen:'+S.screen+' | talking:'+S.talking;
+  if (el) el.textContent = 'v' + VERSION + ' | screen:'+S.screen+' | voix:'+(S.talking?'PARLE':'muette')+' | micro:'+(recOn?'OUVERT':'fermé');
 }
 
 /* ── Bip — un seul bip par commande finale ──────────────────────── */
@@ -475,6 +476,7 @@ document.getElementById('startbtn').addEventListener('click', ()=>{
 
   rec.onstart = ()=>{
     recOn=true;
+    updateDebug();
     document.getElementById('startbtn').style.display='none';
     document.getElementById('circle').classList.add('pulse');
     started=true; S.micOn=true;
@@ -492,15 +494,23 @@ document.getElementById('startbtn').addEventListener('click', ()=>{
 
   rec.onend = ()=>{
     recOn=false;
+    updateDebug();
     /* Relancer SEULEMENT si la voix ne parle pas (alternance stricte) */
     if (S.micOn && started && !S.talking) setTimeout(startRec, 300);
   };
 
   rec.onerror = e=>{
-    if (e.error==='no-speech') return;
-    if (!S.micWarned) {
-      S.micWarned=true;
-      speak('Micro indisponible.');
+    updateDebug();
+    /* silences normaux : pas de parole, ou coupure volontaire (alternance voix/micro) */
+    if (e.error==='no-speech' || e.error==='aborted') return;
+    if (e.error==='not-allowed' || e.error==='service-not-allowed') {
+      if (!S.micWarned) {
+        S.micWarned=true;
+        speak(e.error==='service-not-allowed'
+          ? 'Le service de reconnaissance est refusé. Vérifie le mode ordinateur de Safari et recharge la page.'
+          : 'Le micro est refusé. Autorise le micro pour ce site dans Safari.');
+      }
+      return;
     }
   };
 
