@@ -55,7 +55,7 @@ html,body { width:100%; height:100%; background:#000; color:#fff;
 
 <script>
 /* ================================================================
-   VOCALMAIL v11.7
+   VOCALMAIL v11.8
    ================================================================ */
 
 const WORKER_URL = 'https://vocalmail-gmail.jc-penochetcab.workers.dev';
@@ -77,19 +77,31 @@ async function api(path, method='GET', body=null) {
 let _q=[], _spk=false;
 speechSynthesis.onvoiceschanged = () => { speechSynthesis.getVoices(); };
 
+/* JC/jc/J-C/JCP -> prononce proprement, partout */
+function fixTTS(t) {
+  if (!t) return '';
+  return t
+    .replace(/\bJ\.?\s?-?\s?C\.?\s?P\.?(?![a-zà-ÿA-ZÀ-Ÿ])/gi, 'Ji Cé Pé')
+    .replace(/\bJ\.?\s?-?\s?C\.?(?![a-zà-ÿA-ZÀ-Ÿ])/gi, 'Ji Cé');
+}
+
+let _lastSpoken = '', _ttsEnd = 0;
+
 function speak(txt, then) {
+  txt = fixTTS(txt);
+  _lastSpoken = txt;
   if (!txt) { if(then) then(); return; }
   _q.push({txt,then});
   if (!_spk) _flush();
 }
 
 function _flush() {
-  if (!_q.length) { _spk=false; S.talking=false; return; }
+  if (!_q.length) { _spk=false; S.talking=false; _ttsEnd = Date.now(); return; }
   _spk=true; S.talking=true;
   const {txt,then} = _q.shift();
   const u = new SpeechSynthesisUtterance(txt);
   u.lang='fr-FR'; u.rate=1.0; u.volume=1;
-  u.onend  = () => { _spk=false; S.talking=false; updateDebug(); if(then) then(); _flush(); };
+  u.onend  = () => { _spk=false; S.talking=false; _ttsEnd = Date.now(); updateDebug(); if(then) then(); _flush(); };
   u.onerror = () => { _spk=false; S.talking=false; updateDebug(); if(then) then(); _flush(); };
   speechSynthesis.speak(u);
 }
@@ -101,7 +113,7 @@ function stopTTS() {
 
 function updateDebug() {
   const el = document.getElementById('debug');
-  if (el) el.textContent = 'v11.7 | screen:'+S.screen+' | talking:'+S.talking;
+  if (el) el.textContent = 'v11.8 | screen:'+S.screen+' | talking:'+S.talking;
 }
 
 /* ── Bip — un seul bip par commande finale ──────────────────────── */
@@ -141,6 +153,11 @@ function dedupSubject(s) {
   return s.replace(/^(re|fwd?|tr)\s*:\s*/gi,'').trim();
 }
 
+function cutPoliteness(t) {
+  const m = t.match(/((?:bien |très |tres )?cordialement|amicalement|bien à (?:vous|toi)|sincères salutations|sinceres salutations|respectueusement|amitiés|amities|(?:grosses? )?bises?|(?:gros )?bisous?|je (?:t'|vous )embrasse|à bientôt|a bientot)/i);
+  return m ? t.slice(0, m.index + m[0].length) : t;
+}
+
 function cleanTxt(t) {
   return t.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
 }
@@ -173,7 +190,7 @@ function speakEmail(e) {
   const from = e.from_name||e.from_addr||'inconnu';
   const subj = dedupSubject(e.subject||'sans objet');
   const date = dateFR(e.date);
-  const body = cleanTxt(e.body||e.snippet||'').substring(0,500);
+  const body = cutPoliteness(cleanTxt(e.body||e.snippet||'')).substring(0,500);
   speak(`De ${from}. ${date}. ${subj}. ${body}`);
 }
 
@@ -262,8 +279,32 @@ function goSearchQ() {
 }
 
 /* ── Interprétation commandes — uniquement résultats finals ─────── */
+function isExact(t, key) {
+  const v = N(t);
+  const map = { SUIVANT:['suivant','le suivant','la suite','prochain'],
+                PRECEDENT:['precedent','le precedent','en arriere'],
+                LIRE:['lire','lecture'], ANCIENS:['anciens','anciens messages','ancien'],
+                ECRIRE:['ecrire','envoyer'], CHERCHER:['chercher','rechercher','recherche'],
+                REPONDRE:['repondre','reponse'], MENU:['menu','retour','stop'],
+                OUI:['oui'], NON:['non'], ANNULER:['annuler'] };
+  return (map[key]||[]).some(k => v === k);
+}
+
 function onUtterance(t) {
   if (!t) return;
+  /* ANTI-ECHO :
+     a) plusieurs commandes dans un enonce = echo d'une question -> jete
+     b) fragment de la derniere phrase, dans les 1,5s apres la voix -> jete,
+        sauf commande exacte d'un mot (reponse rapide legitime) */
+  {
+    const _keys = ['SUIVANT','PRECEDENT','LIRE','ECRIRE','CHERCHER','REPONDRE','ANCIENS'];
+    let _hits = 0;
+    for (const k of _keys) if (is(t, k)) _hits++;
+    if (_hits >= 2) return;
+    const _core = _keys.concat(['MENU','OUI','NON','ANNULER']).some(k => isExact(t, k));
+    const _nt = N(t);
+    if (!_core && _nt.length > 5 && Date.now() - _ttsEnd < 1500 && N(_lastSpoken).includes(_nt)) return;
+  }
   /* Ne pas traiter si la TTS parle encore */
   if (S.talking) return;
 
@@ -392,7 +433,7 @@ document.getElementById('startbtn').addEventListener('click', ()=>{
     if (!PIN) { speak("Code d'accès manquant."); return; }
 
     updateDebug();
-    speak('Version onze sept.', ()=>{
+    speak('Version onze huit.', ()=>{
       api('/ping').then(p=>{
         S.userName=p.account_name||p.email||'';
         goLoadEmails('is:unread');
@@ -418,7 +459,7 @@ document.getElementById('startbtn').addEventListener('click', ()=>{
   rec.onresult = e=>{
     const result = e.results[e.results.length-1];
     if (!result.isFinal) return; /* ignorer les intermédiaires */
-    const t = result[0].transcript.trim();
+    const t = result[0].transcript.trim().replace(/pinochet/gi, 'Pénochet');
     document.getElementById('transcript').textContent = t;
     updateDebug();
     if (t) onUtterance(t);
