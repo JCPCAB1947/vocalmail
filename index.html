@@ -55,7 +55,7 @@ html,body { width:100%; height:100%; background:#000; color:#fff;
 
 <script>
 /* ================================================================
-   VOCALMAIL v11.8
+   VOCALMAIL v12.0
    ================================================================ */
 
 const WORKER_URL = 'https://vocalmail-gmail.jc-penochetcab.workers.dev';
@@ -96,31 +96,61 @@ function speak(txt, then) {
 }
 
 function _flush() {
-  if (!_q.length) { _spk=false; S.talking=false; _ttsEnd = Date.now(); return; }
+  if (!_q.length) {
+    _spk=false; S.talking=false; _ttsEnd = Date.now();
+    /* file vide : la voix a fini -> ROUVRIR le micro apres 400 ms */
+    setTimeout(startRec, 400);
+    updateDebug();
+    return;
+  }
   _spk=true; S.talking=true;
+  stopRec(); /* iOS : micro FERME pendant la parole, sinon voix muette/etouffee */
   const {txt,then} = _q.shift();
   const u = new SpeechSynthesisUtterance(txt);
   u.lang='fr-FR'; u.rate=1.0; u.volume=1;
   u.onend  = () => { _spk=false; S.talking=false; _ttsEnd = Date.now(); updateDebug(); if(then) then(); _flush(); };
   u.onerror = () => { _spk=false; S.talking=false; updateDebug(); if(then) then(); _flush(); };
-  speechSynthesis.speak(u);
+  /* 250 ms pour que le micro soit vraiment ferme (anti-sourdine iOS),
+     la PREMIERE phrase part immediatement (deverrouillage deja fait dans le geste) */
+  if (!window._ttsWarm) { window._ttsWarm = true; speechSynthesis.speak(u); }
+  else setTimeout(() => speechSynthesis.speak(u), 250);
+}
+
+function stopRec() {
+  if (rec && recOn) { try { rec.stop(); } catch(e){} }
+}
+
+function startRec() {
+  if (rec && !recOn && !S.talking && S.micOn && started) {
+    try { rec.start(); } catch(e){}
+  }
 }
 
 function stopTTS() {
   _q=[]; speechSynthesis.cancel(); _spk=false; S.talking=false;
+  _ttsEnd = Date.now();
+  setTimeout(startRec, 400);
   updateDebug();
 }
 
 function updateDebug() {
   const el = document.getElementById('debug');
-  if (el) el.textContent = 'v11.8 | screen:'+S.screen+' | talking:'+S.talking;
+  if (el) el.textContent = 'v12.0 | screen:'+S.screen+' | talking:'+S.talking;
 }
 
 /* ── Bip — un seul bip par commande finale ──────────────────────── */
 let _actx=null;
-function beep() {
+function initAudio() {
+  /* a appeler DANS le geste du tap (regle iOS) */
   try {
     if (!_actx) _actx = new (window.AudioContext||window.webkitAudioContext)();
+    if (_actx.state==='suspended') _actx.resume();
+  } catch(e){}
+}
+function beep() {
+  try {
+    if (!_actx) return; /* jamais cree hors geste : c'est lui qui tuait la dictee */
+    if (_actx.state==='suspended') _actx.resume();
     const o=_actx.createOscillator(), g=_actx.createGain();
     o.connect(g); g.connect(_actx.destination);
     o.frequency.value=880; g.gain.value=0.3;
@@ -309,7 +339,8 @@ function onUtterance(t) {
   if (S.talking) return;
 
   document.getElementById('transcript').textContent = t;
-  beep(); /* un seul bip par commande finale */
+  /* Pas de bip pendant la dictee : il perturbait le micro iPhone (lecon v9) */
+  if (S.screen !== 'COMPOSE_BODY') beep();
 
   const sc = S.screen;
 
@@ -412,6 +443,16 @@ document.getElementById('startbtn').addEventListener('click', ()=>{
   const SR = window.SpeechRecognition||window.webkitSpeechRecognition;
   if (!SR) { alert('Reconnaissance vocale non supportée'); return; }
 
+  /* Deverrouillages DANS le geste (regles iOS) :
+     - synthese vocale : enonciation muette synchrone
+     - generateur du bip : contexte audio cree ici */
+  try {
+    const u0 = new SpeechSynthesisUtterance(' ');
+    u0.volume = 0;
+    speechSynthesis.speak(u0);
+  } catch(e) {}
+  initAudio();
+
   rec = new SR();
   rec.lang = 'fr-FR';
   rec.continuous = true;
@@ -424,16 +465,10 @@ document.getElementById('startbtn').addEventListener('click', ()=>{
     document.getElementById('circle').classList.add('pulse');
     started=true; S.micOn=true;
 
-    /* Déverrouiller TTS dans le geste */
-    try {
-      const u0=new SpeechSynthesisUtterance(' ');
-      u0.volume=0; speechSynthesis.speak(u0);
-    } catch(e){}
-
     if (!PIN) { speak("Code d'accès manquant."); return; }
 
     updateDebug();
-    speak('Version onze huit.', ()=>{
+    speak('Version douze.', ()=>{
       api('/ping').then(p=>{
         S.userName=p.account_name||p.email||'';
         goLoadEmails('is:unread');
@@ -443,8 +478,8 @@ document.getElementById('startbtn').addEventListener('click', ()=>{
 
   rec.onend = ()=>{
     recOn=false;
-    /* Relancer si micro encore actif */
-    if (S.micOn && started) setTimeout(()=>{ try{rec.start();}catch(e){} }, 300);
+    /* Relancer SEULEMENT si la voix ne parle pas (alternance stricte) */
+    if (S.micOn && started && !S.talking) setTimeout(startRec, 300);
   };
 
   rec.onerror = e=>{
