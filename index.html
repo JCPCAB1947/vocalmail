@@ -51,11 +51,14 @@ html,body { width:100%; height:100%; background:#000; color:#fff;
   font-size:36px; font-weight:bold; font-family:monospace;
   padding:10px; z-index:1000; text-align:center;
   line-height:1.4;
-">v11.7 | screen:IDLE | talking:false</div>
+"></div>
 
 <script>
+/* ═══ VERSION UNIQUE — ne changer QUE cette ligne ═══ */
+const VERSION = '12.1';
+
 /* ================================================================
-   VOCALMAIL v12.0
+   VOCALMAIL (version : voir constante VERSION)
    ================================================================ */
 
 const WORKER_URL = 'https://vocalmail-gmail.jc-penochetcab.workers.dev';
@@ -98,8 +101,9 @@ function speak(txt, then) {
 function _flush() {
   if (!_q.length) {
     _spk=false; S.talking=false; _ttsEnd = Date.now();
-    /* file vide : la voix a fini -> ROUVRIR le micro apres 400 ms */
-    setTimeout(startRec, 400);
+    /* file vide : la voix a fini -> ROUVRIR le micro apres 700 ms
+       (la fin reelle du son traine apres l'evenement de fin sur iPhone) */
+    setTimeout(startRec, 700);
     updateDebug();
     return;
   }
@@ -133,9 +137,14 @@ function stopTTS() {
   updateDebug();
 }
 
+document.addEventListener('DOMContentLoaded', () => {
+  const v = document.getElementById('version');
+  if (v) v.textContent = 'v' + VERSION;
+});
+
 function updateDebug() {
   const el = document.getElementById('debug');
-  if (el) el.textContent = 'v12.0 | screen:'+S.screen+' | talking:'+S.talking;
+  if (el) el.textContent = 'v' + VERSION + ' | screen:'+S.screen+' | talking:'+S.talking;
 }
 
 /* ── Bip — un seul bip par commande finale ──────────────────────── */
@@ -330,10 +339,15 @@ function onUtterance(t) {
     const _keys = ['SUIVANT','PRECEDENT','LIRE','ECRIRE','CHERCHER','REPONDRE','ANCIENS'];
     let _hits = 0;
     for (const k of _keys) if (is(t, k)) _hits++;
-    if (_hits >= 2) return;
-    const _core = _keys.concat(['MENU','OUI','NON','ANNULER']).some(k => isExact(t, k));
+    if (_hits >= 2) return; /* plusieurs commandes = echo d'une question */
     const _nt = N(t);
-    if (!_core && _nt.length > 5 && Date.now() - _ttsEnd < 1500 && N(_lastSpoken).includes(_nt)) return;
+    const _dt = Date.now() - _ttsEnd;
+    const _inPrompt = _nt.length > 2 && N(_lastSpoken).includes(_nt);
+    const _core = _keys.concat(['MENU','OUI','NON','ANNULER']).some(k => isExact(t, k));
+    /* Un mot present dans la phrase que la voix vient de dire :
+       - commande exacte -> echo si < 1,3 s (une vraie reponse humaine arrive apres)
+       - autre fragment  -> echo si < 2 s */
+    if (_inPrompt && (_core ? _dt < 1300 : (_nt.length > 5 && _dt < 2000))) return;
   }
   /* Ne pas traiter si la TTS parle encore */
   if (S.talking) return;
@@ -468,7 +482,7 @@ document.getElementById('startbtn').addEventListener('click', ()=>{
     if (!PIN) { speak("Code d'accès manquant."); return; }
 
     updateDebug();
-    speak('Version douze.', ()=>{
+    speak('Version ' + VERSION.split('.').join(' ') + '.', ()=>{
       api('/ping').then(p=>{
         S.userName=p.account_name||p.email||'';
         goLoadEmails('is:unread');
