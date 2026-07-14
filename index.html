@@ -64,7 +64,7 @@ html,body { width:100%; height:100%; background:#000; color:#fff;
 
 <script>
 /* ═══ VERSION UNIQUE — ne changer QUE cette ligne ═══ */
-const VERSION = '12.6';
+const VERSION = '12.7';
 const DEBIT = 0.95;       /* debit normal */
 const DEBIT_OBJET = 0.8;  /* plus lent pour les objets des messages */  /* vitesse de la voix : 1.0 = normal, 0.85 = posé, 0.7 = lent */
 
@@ -285,7 +285,7 @@ function goLoadEmails(q) {
     S.loadTries = 0;
     S.emails=r.emails||[]; S.idx=0;
     if (!S.emails.length) { speak('Vous n’avez aucun message non lu.', goMenu); return; }
-    const n=S.emails.length;
+    const n=r.total||S.emails.length;
     speak(`Vous avez ${n} message${n>1?'s':''} non lu${n>1?'s':''}.`);
     annHeader(true);
   }).catch(()=>{
