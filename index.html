@@ -64,8 +64,9 @@ html,body { width:100%; height:100%; background:#000; color:#fff;
 
 <script>
 /* ═══ VERSION UNIQUE — ne changer QUE cette ligne ═══ */
-const VERSION = '12.5';
-const DEBIT = 0.95;  /* vitesse de la voix : 1.0 = normal, 0.85 = posé, 0.7 = lent */
+const VERSION = '12.6';
+const DEBIT = 0.95;       /* debit normal */
+const DEBIT_OBJET = 0.8;  /* plus lent pour les objets des messages */  /* vitesse de la voix : 1.0 = normal, 0.85 = posé, 0.7 = lent */
 
 /* ================================================================
    VOCALMAIL (version : voir constante VERSION)
@@ -100,11 +101,11 @@ function fixTTS(t) {
 
 let _lastSpoken = '', _ttsEnd = 0;
 
-function speak(txt, then) {
+function speak(txt, then, rate) {
   txt = fixTTS(txt);
   _lastSpoken = txt;
   if (!txt) { if(then) then(); return; }
-  _q.push({txt,then});
+  _q.push({txt,then,rate});
   if (!_spk) _flush();
 }
 
@@ -120,9 +121,9 @@ function _flush() {
   _spk=true; S.talking=true;
   updateDebug(); /* rafraichir le voyant DES que la voix demarre */
   stopRec(); /* iOS : micro FERME pendant la parole, sinon voix muette/etouffee */
-  const {txt,then} = _q.shift();
+  const {txt,then,rate} = _q.shift();
   const u = new SpeechSynthesisUtterance(txt);
-  u.lang='fr-FR'; u.rate=DEBIT; u.volume=1;
+  u.lang='fr-FR'; u.rate=rate||DEBIT; u.volume=1;
   u.onend  = () => { _spk=false; _ttsEnd = Date.now(); if(then) then(); _flush(); }; /* talking reste vrai tant que la file n'est pas vide */
   u.onerror = () => { _spk=false; if(then) then(); _flush(); };
   /* 250 ms pour que le micro soit vraiment ferme (anti-sourdine iOS),
@@ -281,12 +282,23 @@ function goMenu() {
 function goLoadEmails(q) {
   S.screen='NAV'; updateDebug();
   api('/list?max=100&q='+encodeURIComponent(q||'is:unread')).then(r=>{
+    S.loadTries = 0;
     S.emails=r.emails||[]; S.idx=0;
     if (!S.emails.length) { speak('Vous n’avez aucun message non lu.', goMenu); return; }
     const n=S.emails.length;
     speak(`Vous avez ${n} message${n>1?'s':''} non lu${n>1?'s':''}.`);
     annHeader(true);
-  }).catch(()=>{ speak('Erreur de chargement.', goMenu); });
+  }).catch(()=>{
+    S.loadTries = (S.loadTries||0) + 1;
+    if (S.loadTries <= 2) {
+      speak('Erreur de chargement. Nouvelle tentative.');
+      setTimeout(()=>goLoadEmails(q), 2500);
+    } else {
+      S.loadTries = 0;
+      S.screen = 'ERROR';
+      speak('Le serveur ne répond pas. Touchez l’écran pour réessayer.');
+    }
+  });
 }
 
 /* ── Navigation un message a la fois ────────────────────────────── */
@@ -295,11 +307,11 @@ function annHeader(first) {
   const from=e.from_name||e.from_addr||'expéditeur inconnu';
   const subj=dedupSubject(e.subject||'sans objet');
   if (first) {
-    speak(`Le message le plus récent a été envoyé par ${from}, le ${dateFR(e.date)}, et concerne : ${subj}.`);
+    speak(`Le message le plus récent a été envoyé par ${from}, le ${dateFR(e.date)}, et concerne : ${subj}.`, null, DEBIT_OBJET);
     speak('Toucher l’écran une fois pour arrêter la lecture.');
     speak('Voulez-vous lire ce message, passer au suivant, ou répondre ? Dites LIRE, SUIVANT, RÉPONDRE, ou AIDE, à tout moment.');
   } else {
-    speak(`Objet : ${subj}.`);
+    speak(`Objet : ${subj}.`, null, DEBIT_OBJET);
     navQuestion();
   }
 }
@@ -312,8 +324,15 @@ function navQuestion() {
 function goReadBody() {
   S.screen='NAV';
   const e=S.emails[S.idx];
-  speak(cutPoliteness(cleanTxt(e.body||e.snippet||'Message vide.')));
-  navQuestion();
+  api('/read?id='+encodeURIComponent(e.id)).then(d=>{
+    const corps = cutPoliteness(cleanTxt(d.body||e.snippet||'Message vide.'));
+    speak(corps);
+    navQuestion();
+  }).catch(()=>{
+    /* secours : au moins l'aperçu */
+    speak(cutPoliteness(cleanTxt(e.snippet||'Message indisponible.')));
+    navQuestion();
+  });
 }
 
 function goLast() {
@@ -496,6 +515,17 @@ function onUtterance(t) {
   }
 }
 
+/* ── Réveil : iOS gèle la page en arrière-plan ; remise en état propre ── */
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && started) {
+    try { if (_actx && _actx.state === 'suspended') _actx.resume(); } catch(e){}
+    try { speechSynthesis.cancel(); } catch(e){}
+    _q=[]; _spk=false; S.talking=false;
+    setTimeout(startRec, 500);
+    updateDebug();
+  }
+});
+
 /* ── Gestes ─────────────────────────────────────────────────────── */
 let _tx=0, _ty=0, _swiped=false;
 document.body.addEventListener('touchstart', e=>{
@@ -528,6 +558,7 @@ document.body.addEventListener('click', e=>{
   _tapT=setTimeout(()=>{
     const n=_tapN; _tapN=0;
     if (n>=2) { goGoodbye(); return; }             /* toucher DEUX fois = quitter */
+    if (S.screen==='ERROR') { goLoadEmails('is:unread'); return; } /* toucher = reessayer */
     if (S.screen.indexOf('COMPOSE')===0) return;   /* pas de tap parasite en dictee */
     S.helping=false;                               /* toucher UNE fois = arreter la lecture */
     stopTTS();
