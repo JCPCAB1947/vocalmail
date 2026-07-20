@@ -64,7 +64,7 @@ html,body { width:100%; height:100%; background:#000; color:#fff;
 
 <script>
 /* ═══ VERSION UNIQUE — ne changer QUE cette ligne ═══ */
-const VERSION = '12.7';
+const VERSION = '12.8';
 const DEBIT = 0.95;       /* debit normal */
 const DEBIT_OBJET = 0.8;  /* plus lent pour les objets des messages */  /* vitesse de la voix : 1.0 = normal, 0.85 = posé, 0.7 = lent */
 
@@ -281,17 +281,21 @@ function goMenu() {
 
 function goLoadEmails(q) {
   S.screen='NAV'; updateDebug();
-  api('/list?max=100&q='+encodeURIComponent(q||'is:unread')).then(r=>{
+  api('/list?max=100&q='+encodeURIComponent(q||'in:inbox is:unread')).then(r=>{
     S.loadTries = 0;
     S.emails=r.emails||[]; S.idx=0;
     if (!S.emails.length) { speak('Vous n’avez aucun message non lu.', goMenu); return; }
     const n=r.total||S.emails.length;
     speak(`Vous avez ${n} message${n>1?'s':''} non lu${n>1?'s':''}.`);
     annHeader(true);
-  }).catch(()=>{
+  }).catch((err)=>{
     S.loadTries = (S.loadTries||0) + 1;
+    /* DIAGNOSTIC : dire la cause reelle */
+    const cause = (err && err.message ? err.message : 'inconnue').slice(0, 90);
+    const v = document.getElementById('version');
+    if (v) v.textContent = 'ERREUR: ' + cause;
     if (S.loadTries <= 2) {
-      speak('Erreur de chargement. Nouvelle tentative.');
+      speak('Erreur de chargement : ' + cause + '. Nouvelle tentative.');
       setTimeout(()=>goLoadEmails(q), 2500);
     } else {
       S.loadTries = 0;
@@ -462,7 +466,7 @@ function onUtterance(t) {
   if (is(t,'AIDE')) { stopTTS(); goHelp(); return; }
 
   if (sc==='MENU') {
-    if (is(t,'LIRE'))     { goLoadEmails('is:unread'); return; }
+    if (is(t,'LIRE'))     { goLoadEmails('in:inbox is:unread'); return; }
     if (is(t,'ANCIENS'))  { goLoadEmails('is:read');   return; }
     if (is(t,'ECRIRE'))   { goComposeRecipient();      return; }
     if (is(t,'CHERCHER')) { goSearchQ();               return; }
@@ -543,7 +547,7 @@ document.body.addEventListener('touchend', e=>{
   S.helping=false;
   stopTTS();
   if (ay>ax) {
-    if (dy<0) goLoadEmails('is:unread'); /* HAUT : accueil complet */
+    if (dy<0) goLoadEmails('in:inbox is:unread'); /* HAUT : accueil complet */
     else goLast();                        /* BAS : dernier message */
   } else if (S.emails.length) {
     if (dx>0) goNextEmail(); else goPrevEmail();
@@ -558,7 +562,7 @@ document.body.addEventListener('click', e=>{
   _tapT=setTimeout(()=>{
     const n=_tapN; _tapN=0;
     if (n>=2) { goGoodbye(); return; }             /* toucher DEUX fois = quitter */
-    if (S.screen==='ERROR') { goLoadEmails('is:unread'); return; } /* toucher = reessayer */
+    if (S.screen==='ERROR') { goLoadEmails('in:inbox is:unread'); return; } /* toucher = reessayer */
     if (S.screen.indexOf('COMPOSE')===0) return;   /* pas de tap parasite en dictee */
     S.helping=false;                               /* toucher UNE fois = arreter la lecture */
     stopTTS();
@@ -603,7 +607,7 @@ document.getElementById('startbtn').addEventListener('click', ()=>{
     speak('Démarrage de VocalMail, version ' + VERSION.split('.').join(' ') + '.', ()=>{
       api('/ping').then(p=>{
         S.userName=p.account_name||p.email||'';
-        goLoadEmails('is:unread');
+        goLoadEmails('in:inbox is:unread');
       }).catch(()=>{ speak('Erreur de connexion.', goMenu); });
     });
   };
