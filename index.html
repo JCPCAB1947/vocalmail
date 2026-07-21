@@ -62,7 +62,7 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
 
 <script>
 /* ═══ VERSION UNIQUE — ne changer QUE cette ligne ═══ */
-const VERSION = '13.1';
+const VERSION = '13.2';
 const DEBIT = 1.0;       /* debit normal */
 const DEBIT_OBJET = 0.8;  /* plus lent pour les objets des messages */  /* vitesse de la voix : 1.0 = normal, 0.85 = posé, 0.7 = lent */
 
@@ -100,6 +100,7 @@ function fixTTS(t) {
 let _lastSpoken = '', _ttsEnd = 0;
 
 function speak(txt, then, rate) {
+  if (S.dead) return;      /* l'appli est fermee : silence definitif */
   txt = fixTTS(txt);
   _lastSpoken = txt;
   if (!txt) { if(then) then(); return; }
@@ -273,6 +274,8 @@ function speakEmail(e) {
 
 /* ── Écrans ─────────────────────────────────────────────────────── */
 function goGoodbye() {
+  if (S.dead) return;      /* deja en train de mourir */
+  S.dead = true;           /* VERROU : plus aucune parole ni commande */
   S.micOn = false; stopRec(); 
   _q=[]; speechSynthesis.cancel(); _spk=false; S.talking=false;
   const u = new SpeechSynthesisUtterance('Au revoir. À bientôt.');
@@ -472,6 +475,7 @@ function isExact(t, key) {
 }
 
 function onUtterance(t) {
+  if (S.dead) return;      /* l'appli est fermee : aucune commande */
   if (!t) return;
   /* ANTI-ECHO :
      a) plusieurs commandes dans un enonce = echo d'une question -> jete
