@@ -37,8 +37,7 @@ html,body { width:100%; height:100%; background:#000; color:#fff;
   pointer-events:none; z-index:100;
 }
 #transcript, #debug { display:none !important; }
-#miclight { position:fixed; top:16px; left:16px; width:22px; height:22px;
-  border-radius:50%; background:#e33; box-shadow:0 0 12px #e33; display:none; }
+body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
 </style>
 </head>
 <body>
@@ -48,7 +47,6 @@ html,body { width:100%; height:100%; background:#000; color:#fff;
   font-size:16px;padding:10px 16px;font-family:monospace;">MAJ</button>
 <div id="version" style="position:fixed;bottom:8px;left:0;right:0;text-align:center;
   color:#555;font-family:monospace;font-size:14px;"></div>
-<div id="miclight"></div>
 <button id="startbtn">TOUCHER L'ÉCRAN</button>
 <div id="circle">
   <svg viewBox="0 0 24 24"><path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11h-2z"/></svg>
@@ -130,7 +128,13 @@ function _flush() {
      la PREMIERE phrase part immediatement (deverrouillage deja fait dans le geste).
      ET : au moins 300 ms apres un cancel() sinon iOS se coince (bug connu). */
   const _coolDown = Math.max(0, 300 - (Date.now() - _cancelT));
-  if (!window._ttsWarm) { window._ttsWarm = true; speechSynthesis.speak(u); }
+  if (!window._ttsWarm) {
+    /* Premiere phrase audible : 350 ms pour laisser la carte son se reveiller,
+       sinon la premiere syllabe est tronquee (le deverrouillage muet du geste
+       a deja ete fait, on a le droit d'attendre) */
+    window._ttsWarm = true;
+    setTimeout(() => speechSynthesis.speak(u), 350);
+  }
   else setTimeout(() => speechSynthesis.speak(u), Math.max(250, _coolDown));
 }
 
@@ -139,13 +143,14 @@ function stopRec() {
 }
 
 function startRec() {
-  if (rec && !recOn && !S.talking && !_spk && !_q.length && S.micOn && started) {
+  if (rec && !recOn && !S.talking && !_spk && !_q.length && !S.loading && S.micOn && started) {
     try { rec.start(); } catch(e){}
   }
 }
 
 let _cancelT = 0;
 function stopTTS() {
+  if (S.paused) { try { speechSynthesis.resume(); } catch(e){} S.paused=false; }
   _q=[]; speechSynthesis.cancel(); _spk=false; S.talking=false;
   _ttsEnd = Date.now();
   _cancelT = Date.now(); /* iOS se coince si on reparle trop vite apres cancel */
@@ -168,9 +173,9 @@ document.addEventListener('DOMContentLoaded', () => {
 function updateDebug() {
   const el = document.getElementById('debug');
   if (el) el.textContent = 'v' + VERSION + ' | screen:'+S.screen+' | voix:'+(S.talking?'PARLE':'muette')+' | micro:'+(recOn?'OUVERT':'fermé');
-  /* Voyant rouge : allume quand le micro ecoute reellement */
-  const ml = document.getElementById('miclight');
-  if (ml) ml.style.display = recOn ? 'block' : 'none';
+  /* LE GRAND CERCLE est le voyant : ROUGE quand le micro ecoute, blanc sinon */
+  const c = document.getElementById('circle');
+  if (c) c.style.background = recOn ? '#e33' : '#fff';
 }
 
 /* ── Bip — un seul bip par commande finale ──────────────────────── */
@@ -251,6 +256,7 @@ function is(t, key) {
     'NON'      : ['non','no','negatif'],
     'AIDE'     : ['aide','help','commandes'],
     'ANCIENS'  : ['anciens','deja lus','lus'],
+    'EFFACER'  : ['effacer','efface','supprimer','supprime','poubelle','corbeille'],
     'QUITTER'  : ['quitter','quitte','au revoir','fermer','fin de session','arrete tout'],
   };
   return (map[key]||[key.toLowerCase()]).some(k => v.includes(k));
@@ -272,11 +278,9 @@ function goGoodbye() {
   const u = new SpeechSynthesisUtterance('Au revoir. À bientôt.');
   u.lang='fr-FR'; u.rate=DEBIT;
   u.onend = () => {
-    /* Ecran de fin : noir, silencieux, sans piege (Safari interdit de fermer l'onglet) */
-    document.body.innerHTML = '<div style="position:fixed;inset:0;background:#000;color:#666;' +
-      'display:flex;align-items:center;justify-content:center;font-size:28px;' +
-      'font-family:-apple-system,sans-serif;text-align:center;padding:30px;">' +
-      'VocalMail est fermé.<br>Vous pouvez poser votre téléphone.</div>';
+    /* Quitter COMPLETEMENT : fermeture de l'onglet (relance par "Dis Siri, Facteur") */
+    try { window.close(); } catch(e) {}
+    try { location.replace('about:blank'); } catch(e) {}
   };
   speechSynthesis.speak(u);
 }
@@ -287,10 +291,12 @@ function goMenu() {
 }
 
 function goLoadEmails(q) {
-  if (S.loading) return; /* un seul chargement a la fois (anti double-balayage) */
-  S.loading = true;
+  if (S.loadCall) return; /* un seul chargement a la fois (anti double-balayage) */
+  S.loadCall = true;
+  S.loading = true; /* micro tenu ferme jusqu'a l'arrivee des messages */
   S.screen='NAV'; updateDebug();
   api('/list?max=100&q='+encodeURIComponent(q||'in:inbox is:unread')).then(r=>{
+    S.loadCall = false;
     S.loading = false;
     S.loadTries = 0;
     S.emails=r.emails||[]; S.idx=0;
@@ -299,6 +305,7 @@ function goLoadEmails(q) {
     speak(`Vous avez ${n} message${n>1?'s':''} non lu${n>1?'s':''}.`);
     annHeader(true);
   }).catch((err)=>{
+    S.loadCall = false;
     S.loading = false;
     S.loadTries = (S.loadTries||0) + 1;
     /* DIAGNOSTIC : dire la cause reelle */
@@ -323,7 +330,6 @@ function annHeader(first) {
   const subj=dedupSubject(e.subject||'sans objet');
   if (first) {
     speak(`Le message le plus récent a été envoyé par ${from}, le ${dateFR(e.date)}, et concerne : ${subj}.`, null, DEBIT_OBJET);
-    speak('Toucher l’écran une fois pour arrêter la lecture.');
     speak('Voulez-vous lire ce message, passer au suivant, ou répondre ? Dites LIRE, SUIVANT, RÉPONDRE, ou AIDE, à tout moment.');
   } else {
     speak(`Objet : ${subj}.`, null, DEBIT_OBJET);
@@ -332,8 +338,8 @@ function annHeader(first) {
 }
 
 function navQuestion() {
-  speak(S.idx===0 ? 'Dites LIRE, ou SUIVANT.'
-                  : 'Dites LIRE, SUIVANT, ou PRÉCÉDENT.');
+  speak(S.idx===0 ? 'Dites LIRE, SUIVANT, ou EFFACER.'
+                  : 'Dites LIRE, SUIVANT, PRÉCÉDENT, ou EFFACER.');
 }
 
 function goReadBody() {
@@ -350,6 +356,17 @@ function goReadBody() {
   });
 }
 
+function doTrash() {
+  const e=S.emails[S.idx];
+  api('/trash?id='+encodeURIComponent(e.id)).then(()=>{
+    S.emails.splice(S.idx, 1);
+    if (!S.emails.length) { speak('Message effacé. Vous n’avez plus de messages.', goMenu); return; }
+    if (S.idx >= S.emails.length) S.idx = S.emails.length-1;
+    speak('Message effacé.');
+    annHeader(false);
+  }).catch(()=>{ speak('L’effacement a échoué.'); navQuestion(); });
+}
+
 function goLast() {
   if (!S.emails.length) return;
   S.idx=S.emails.length-1;
@@ -360,12 +377,15 @@ function goLast() {
 function goHelp() {
   S.helping=true;
   const parts=[
-    'Toucher l’écran une fois arrête la lecture.',
+    'VocalMail se pilote à la voix, ou au geste. Pour les commandes vocales, attendez toujours le silence. Les gestes, eux, sont opérationnels à tout moment, même pendant la lecture.',
+    'Toucher l’écran une fois interrompt la lecture. Toucher à nouveau la reprend.',
     'Dites SUIVANT, pour lire l’objet du message suivant.',
     'PRÉCÉDENT, pour revenir en arrière.',
     'LIRE, pour lire le contenu du message.',
     'RÉPONDRE, pour répondre au message courant.',
+    'EFFACER, pour mettre le message à la corbeille.',
     'Ou bien, balayez l’écran. Vers la droite, pour le suivant. Vers la gauche, pour le précédent. Vers le haut, pour revenir à l’accueil. Vers le bas, pour atteindre le dernier message.',
+    'Maintenez le doigt appuyé sur l’écran, à tout moment, pour réentendre cette aide.',
     'Dites QUITTER, ou touchez deux fois l’écran, pour quitter VocalMail.',
   ];
   let i=0;
@@ -439,6 +459,7 @@ function isExact(t, key) {
                 LIRE:['lire','lecture'], ANCIENS:['anciens','anciens messages','ancien'],
                 ECRIRE:['ecrire','envoyer'], CHERCHER:['chercher','rechercher','recherche'],
                 REPONDRE:['repondre','reponse'], MENU:['menu','retour','stop'],
+                EFFACER:['effacer','efface','supprimer','supprime'],
                 OUI:['oui'], NON:['non'], ANNULER:['annuler'] };
   return (map[key]||[]).some(k => v === k);
 }
@@ -450,7 +471,7 @@ function onUtterance(t) {
      b) fragment de la derniere phrase, dans les 1,5s apres la voix -> jete,
         sauf commande exacte d'un mot (reponse rapide legitime) */
   {
-    const _keys = ['SUIVANT','PRECEDENT','LIRE','ECRIRE','CHERCHER','REPONDRE','ANCIENS'];
+    const _keys = ['SUIVANT','PRECEDENT','LIRE','ECRIRE','CHERCHER','REPONDRE','ANCIENS','EFFACER'];
     let _hits = 0;
     for (const k of _keys) if (is(t, k)) _hits++;
     if (_hits >= 2) return; /* plusieurs commandes = echo d'une question */
@@ -486,6 +507,13 @@ function onUtterance(t) {
   }
 
   if (sc==='NAV') {
+    if (S.confirmDel) {
+      if (is(t,'OUI')) { S.confirmDel=false; doTrash(); return; }
+      if (is(t,'NON')) { S.confirmDel=false; speak('D’accord, je ne l’efface pas.'); navQuestion(); return; }
+      return;
+    }
+    if (is(t,'EFFACER'))   { S.confirmDel=true;
+      speak('Voulez-vous vraiment effacer ce message ? Dites OUI, ou NON.'); return; }
     if (is(t,'LIRE'))      { goReadBody();  return; }
     if (is(t,'SUIVANT'))   { goNextEmail(); return; }
     if (is(t,'PRECEDENT')) { goPrevEmail(); return; }
@@ -543,7 +571,9 @@ document.addEventListener('visibilitychange', () => {
 
 /* ── Gestes ─────────────────────────────────────────────────────── */
 let _tx=0, _ty=0, _swiped=false;
+let _t0=0;
 document.body.addEventListener('touchstart', e=>{
+  _t0=Date.now();
   if (!started) return;
   _tx=e.touches[0].clientX; _ty=e.touches[0].clientY; _swiped=false;
 },{passive:true});
@@ -553,7 +583,15 @@ document.body.addEventListener('touchend', e=>{
   const dx=e.changedTouches[0].clientX-_tx;
   const dy=e.changedTouches[0].clientY-_ty;
   const ax=Math.abs(dx), ay=Math.abs(dy);
-  if (ax<40&&ay<40) return;
+  if (ax<40&&ay<40) {
+    if (Date.now()-_t0 > 600) {   /* MAINTENIR APPUYÉ = AIDE (marche pendant la voix) */
+      _swiped=true;                /* neutraliser le clic qui suit */
+      S.helping=false;
+      stopTTS();
+      goHelp();
+    }
+    return;
+  }
   _swiped=true;
   S.helping=false;
   stopTTS();
@@ -575,8 +613,16 @@ document.body.addEventListener('click', e=>{
     if (n>=2) { goGoodbye(); return; }             /* toucher DEUX fois = quitter */
     if (S.screen==='ERROR') { goLoadEmails('in:inbox is:unread'); return; } /* toucher = reessayer */
     if (S.screen.indexOf('COMPOSE')===0) return;   /* pas de tap parasite en dictee */
-    S.helping=false;                               /* toucher UNE fois = arreter la lecture */
-    stopTTS();
+    /* toucher UNE fois = PAUSE de la lecture ; toucher a nouveau = REPRISE */
+    if (S.paused) {
+      try { speechSynthesis.resume(); } catch(e){}
+      S.paused=false; updateDebug(); return;
+    }
+    if (S.talking) {
+      try { speechSynthesis.pause(); } catch(e){}
+      S.paused=true; updateDebug(); return;
+    }
+    S.helping=false;
     navQuestion();
   }, 380);
 });
@@ -613,11 +659,14 @@ document.getElementById('startbtn').addEventListener('click', ()=>{
     started=true; S.micOn=true;
 
     if (!PIN) { speak("Code d'accès manquant."); return; }
+    S.loading = true; /* tenir le micro ferme pendant TOUT le demarrage */
 
     updateDebug();
-    speak('Démarrage de VocalMail, version ' + VERSION.split('.').join(' ') + '.', ()=>{
+    speak('Démarrage de VocalMail, version ' + VERSION.split('.').join(' ') + '.');
+    speak('Pour le mode d’emploi, dites AIDE, ou maintenez le doigt appuyé sur l’écran.', ()=>{
       api('/ping').then(p=>{
         S.userName=p.account_name||p.email||'';
+        S.loading = false; /* goLoadEmails reprend le relais */
         goLoadEmails('in:inbox is:unread');
       }).catch(()=>{ speak('Erreur de connexion.', goMenu); });
     });
