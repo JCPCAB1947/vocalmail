@@ -62,7 +62,7 @@ body { -webkit-user-select:none; user-select:none; -webkit-touch-callout:none; }
 
 <script>
 /* ═══ VERSION UNIQUE — ne changer QUE cette ligne ═══ */
-const VERSION = '13.0';
+const VERSION = '13.1';
 const DEBIT = 1.0;       /* debit normal */
 const DEBIT_OBJET = 0.8;  /* plus lent pour les objets des messages */  /* vitesse de la voix : 1.0 = normal, 0.85 = posé, 0.7 = lent */
 
@@ -278,9 +278,16 @@ function goGoodbye() {
   const u = new SpeechSynthesisUtterance('Au revoir. À bientôt.');
   u.lang='fr-FR'; u.rate=DEBIT;
   u.onend = () => {
-    /* Quitter COMPLETEMENT : fermeture de l'onglet (relance par "Dis Siri, Facteur") */
+    /* 1. FERMETURE COMPLETE quand Safari l'accepte (vue fraiche du
+          raccourci Facteur : l'appli se ferme net — le cas de Philippe).
+       2. Sinon (onglet avec historique, cas des tests) : retour a
+          l'ecran de depart, silencieux — jamais de page blanche. */
     try { window.close(); } catch(e) {}
-    try { location.replace('about:blank'); } catch(e) {}
+    setTimeout(() => {
+      const u2 = new URL(location.href);
+      u2.searchParams.set('r', Date.now());
+      location.replace(u2);
+    }, 500);
   };
   speechSynthesis.speak(u);
 }
